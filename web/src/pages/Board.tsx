@@ -37,6 +37,8 @@ export default function Board() {
   const [penWidth, setPenWidth] = useState(4);
   const [showShapes, setShowShapes] = useState(false);
   const [liveStroke, setLiveStroke] = useState<number[][] | null>(null);
+  /** Mirror of liveStroke readable synchronously (state updates are deferred). */
+  const liveStrokeRef = useRef<number[][] | null>(null);
   const strokes = useRef<{ pts: number[][]; c: string; w: number }[]>([]);
   const [erasing, setErasing] = useState(false);
   const [linkDlg, setLinkDlg] = useState(false);
@@ -175,6 +177,16 @@ export default function Board() {
   /* ------------------------ pointer handling ------------------------ */
   const lastTap = useRef<{ t: number; x: number; y: number }>({ t: 0, x: 0, y: 0 });
 
+  /** Collapse any live text selection so it can't fight with a drag. */
+  const dropSelection = () => {
+    const sel = window.getSelection?.();
+    if (sel && !sel.isCollapsed) {
+      const a = document.activeElement;
+      // Leave a field the user is genuinely editing alone.
+      if (!(a instanceof HTMLTextAreaElement || a instanceof HTMLInputElement)) sel.removeAllRanges();
+    }
+  };
+
   const onPointerDown = (e: React.PointerEvent) => {
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     // double-tap empty canvas on touch = drop a sticky there
@@ -216,12 +228,15 @@ export default function Board() {
     // Drawing mode: capture strokes in board coordinates
     if (tool === 'draw') {
       const p = toBoardCoords(e.clientX, e.clientY);
-      setLiveStroke([[Math.round(p.x), Math.round(p.y)]]);
+      const start = [[Math.round(p.x), Math.round(p.y)]];
+      liveStrokeRef.current = start;
+      setLiveStroke(start);
       capture(e.pointerId);
       return;
     }
     const onItem = (e.target as HTMLElement).closest('.sticky, .board-item, .resize-handle, .item-bar');
     if (onItem) return;
+    dropSelection();
     if (e.button !== undefined && e.button !== 0 && e.button !== 1) return;
     setSel(null);
     setShowColors(false);
@@ -254,12 +269,10 @@ export default function Board() {
     if (liveStroke) {
       if (e.pointerType === 'mouse' && e.buttons === 0) { finishStroke(); return; }
       const p = toBoardCoords(e.clientX, e.clientY);
-      setLiveStroke((st) => {
-        if (!st) return st;
-        const next = [...st, [Math.round(p.x), Math.round(p.y)]];
-        shareInk(next);
-        return next;
-      });
+      const next = [...(liveStrokeRef.current || []), [Math.round(p.x), Math.round(p.y)]];
+      liveStrokeRef.current = next;
+      setLiveStroke(next);
+      shareInk(next);
       return;
     }
     if (drag && e.pointerType === 'mouse' && e.buttons === 0) { onPointerUp(e); return; }
@@ -309,10 +322,14 @@ export default function Board() {
   };
 
   const finishStroke = () => {
-    setLiveStroke((st) => {
-      if (st && st.length > 1) strokes.current.push({ pts: st, c: penColor, w: penWidth });
-      return null;
-    });
+    // Commit synchronously: a React state updater runs at render time, so
+    // broadcasting from inside one would send the sketch *before* the stroke
+    // was appended — peers would briefly receive an empty sketch and the ink
+    // would vanish on their screen until the next stroke began.
+    const st = liveStrokeRef.current;
+    if (st && st.length > 1) strokes.current.push({ pts: st, c: penColor, w: penWidth });
+    liveStrokeRef.current = null;
+    setLiveStroke(null);
     lastInk.current = 0;
     shareInk();
   };
@@ -338,6 +355,7 @@ export default function Board() {
     // Left/primary button only — right-click shouldn't start a drag.
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
+    dropSelection();
     if (e.pointerType !== 'mouse') haptic.press();
     setSel(it.id);
     // Don't reshuffle z on every touch; only lift it if something covers it.
@@ -352,6 +370,26 @@ export default function Board() {
     setDrag({ kind: 'resize', id: it.id, sx: e.clientX, sy: e.clientY, iw: it.w, ih: it.h });
     capture(e.pointerId);
   };
+
+  /**
+   * Suppress text selection on the canvas.
+   * `selectstart` isn't in React's typed event list, so bind it natively.
+   * Without this, dragging sweeps a selection across labels, which then
+   * fights with the drag and leaves highlighted text behind.
+   */
+  useEffect(() => {
+    const el = canvasEl.current;
+    if (!el) return;
+    const stop = (e: Event) => {
+      const t = e.target as HTMLElement | null;
+      // Allow selecting inside a field the user is actually editing.
+      if (t && (t instanceof HTMLTextAreaElement || t instanceof HTMLInputElement) &&
+          document.activeElement === t) return;
+      e.preventDefault();
+    };
+    el.addEventListener('selectstart', stop);
+    return () => el.removeEventListener('selectstart', stop);
+  }, [board?.id]);
 
   // Native, non-passive wheel handling (React's onWheel is passive → preventDefault is ignored)
   useEffect(() => {
@@ -421,7 +459,10 @@ export default function Board() {
         else { setTool('draw'); setSel(null); }
       }
       if (e.key === 'Escape') {
-        if (tool === 'draw') { strokes.current = []; setLiveStroke(null); setTool('select'); sendRef.current?.({ t: 'ink:end' }); }
+        if (tool === 'draw') {
+          strokes.current = []; liveStrokeRef.current = null; setLiveStroke(null);
+          setTool('select'); sendRef.current?.({ t: 'ink:end' });
+        }
         setSel(null);
         setShowShapes(false);
       }
@@ -727,6 +768,7 @@ export default function Board() {
           }
           style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${26 * view.k}px ${26 * view.k}px` }}
           ref={canvasEl}
+          onDragStart={(e) => e.preventDefault()}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -931,7 +973,11 @@ export default function Board() {
             <div className="tb-div" />
             <button
               title="Undo last stroke"
-              onClick={() => { strokes.current = strokes.current.slice(0, -1); setLiveStroke(null); setEraseTick((t) => t + 1); haptic.tap(); }}
+              onClick={() => {
+                strokes.current = strokes.current.slice(0, -1);
+                liveStrokeRef.current = null; setLiveStroke(null);
+                setEraseTick((t) => t + 1); lastInk.current = 0; shareInk(); haptic.tap();
+              }}
             >
               <Undo2 size={19} />
             </button>

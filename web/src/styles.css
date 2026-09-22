@@ -967,3 +967,38 @@ kbd {
 .text-item.selected textarea { cursor: text; }
 .text-item:not(.selected) textarea { user-select: none; pointer-events: none; }
 .text-bar { max-width: calc(100vw - 24px); overflow-x: auto; }
+
+/* ==============================================================
+   NO ACCIDENTAL TEXT SELECTION ON THE CANVAS
+   Dragging the board or an item used to sweep-select label text,
+   which then fought with the drag. Everything on the canvas is
+   unselectable except fields you are actively editing.
+   ============================================================== */
+.board-wrap,
+.board-canvas,
+.board-canvas *,
+.board-toolbar,
+.topbar {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Inputs stay selectable so editing still works normally. */
+.board-canvas textarea,
+.board-canvas input,
+.board-canvas [contenteditable='true'],
+.topbar input,
+.sheet input,
+.sheet textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Kill the blue drag-highlight and the iOS long-press callout. */
+.board-wrap, .board-canvas, .board-canvas * {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Never drag images/links as browser ghost images. */
+.board-canvas img, .board-canvas a { -webkit-user-drag: none; user-drag: none; }
