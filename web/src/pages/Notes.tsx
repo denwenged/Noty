@@ -429,55 +429,96 @@ function NoteCard({
 /** Put a note into one or more collections you can write to. */
 function FileIntoCollection({ noteId, onClose }: { noteId: number; onClose: () => void }) {
   const [cols, setCols] = useState<Collection[]>([]);
+  const [inIds, setInIds] = useState<number[] | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
-  const [done, setDone] = useState<number[]>([]);
   const { toast } = useApp();
 
   useEffect(() => {
-    api
-      .get<Collection[]>('/collections')
-      .then((all) => setCols(all.filter((c) => c.role !== 'viewer')))
-      .catch(() => {});
-  }, []);
+    Promise.all([
+      api.get<Collection[]>('/collections'),
+      api.get<number[]>(`/collections/for-note/${noteId}`),
+    ])
+      .then(([all, mine]) => {
+        setCols(all.filter((c) => c.role !== 'viewer'));
+        setInIds(mine);
+      })
+      .catch((e) => { toast(e.message, 'err'); setInIds([]); });
+  }, [noteId]);
 
-  const add = async (c: Collection) => {
+  /** Membership is a toggle — a misclick is undone by clicking again. */
+  const toggle = async (c: Collection) => {
+    if (busy || !inIds) return;
+    const on = inIds.includes(c.id);
     setBusy(c.id);
+    // Optimistic: flip immediately, roll back if the request fails.
+    setInIds((cur) => (cur ? (on ? cur.filter((x) => x !== c.id) : [...cur, c.id]) : cur));
     try {
-      await api.post(`/collections/${c.id}/notes`, { noteId });
-      setDone((d) => [...d, c.id]);
-      haptic.success();
-      toast(`Added to ${c.name}`);
-    } catch (e: any) { toast(e.message, 'err'); }
-    finally { setBusy(null); }
+      if (on) {
+        await api.del(`/collections/${c.id}/notes/${noteId}`);
+        haptic.tap();
+        toast(`Removed from ${c.name}`);
+      } else {
+        await api.post(`/collections/${c.id}/notes`, { noteId });
+        haptic.success();
+        toast(`Added to ${c.name}`);
+      }
+    } catch (e: any) {
+      setInIds((cur) => (cur ? (on ? [...cur, c.id] : cur.filter((x) => x !== c.id)) : cur));
+      toast(e.message, 'err');
+    } finally {
+      setBusy(null);
+    }
   };
+
+  const count = inIds?.length ?? 0;
 
   return (
     <Sheet onClose={onClose} maxWidth={400}>
-      <h3 style={{ margin: '0 0 12px', fontFamily: 'var(--font-display)' }}>Add to collection</h3>
+      <h3 style={{ margin: 0, fontFamily: 'var(--font-display)' }}>Collections</h3>
+      <p className="muted" style={{ margin: '4px 0 14px', fontSize: 13 }}>
+        {inIds === null
+          ? 'Loading…'
+          : count
+            ? `This note is in ${count} ${count === 1 ? 'collection' : 'collections'}. Tap to add or remove.`
+            : 'Tap a collection to add this note. Tap again to remove it.'}
+      </p>
+
       <div className="pick-list">
-        {cols.length === 0 ? (
-          <div className="muted" style={{ fontSize: 13, padding: '12px 2px' }}>
-            No collections you can write to yet.
+        {inIds === null ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 44, borderRadius: 11, ['--i' as any]: i }} />
+          ))
+        ) : cols.length === 0 ? (
+          <div className="pick-empty">
+            <FolderOpen size={22} />
+            <div>No collections you can write to yet.</div>
           </div>
         ) : (
-          cols.map((c) => (
-            <button
-              key={c.id}
-              className={'pick-row' + (done.includes(c.id) ? ' on' : '')}
-              disabled={busy === c.id || done.includes(c.id)}
-              onClick={() => add(c)}
-            >
-              <span className={'pick-box' + (done.includes(c.id) ? ' on' : '')} />
-              <span className="grow" style={{ textAlign: 'left' }}>
-                <span style={{ fontWeight: 650 }}>{c.name}</span>
-                {c.shared && <span className="role-chip sm" style={{ marginLeft: 7 }}>{c.role}</span>}
-              </span>
-              {busy === c.id && <span className="spinner" />}
-            </button>
-          ))
+          cols.map((c) => {
+            const on = inIds.includes(c.id);
+            return (
+              <button
+                key={c.id}
+                className={'pick-row' + (on ? ' on' : '')}
+                aria-pressed={on}
+                disabled={busy === c.id}
+                onClick={() => toggle(c)}
+              >
+                <span className={'pick-box' + (on ? ' on' : '')}>
+                  {on && <Check size={12} strokeWidth={3.4} />}
+                </span>
+                <span className="grow" style={{ textAlign: 'left', minWidth: 0 }}>
+                  <span className="pick-name">{c.name}</span>
+                  {c.shared && <span className="role-chip sm" style={{ marginLeft: 7 }}>{c.role}</span>}
+                </span>
+                {busy === c.id && <span className="spinner sm" />}
+              </button>
+            );
+          })
         )}
       </div>
-      <div className="row" style={{ marginTop: 14 }}>
+
+      <div className="row" style={{ marginTop: 16 }}>
         <div className="grow" />
         <button className="btn primary" onClick={onClose}>Done</button>
       </div>
@@ -561,6 +602,7 @@ function Editor({
 
   return (
     <Sheet
+      padded={false}
       onClose={onClose}
       style={{
         ['--modal-bg' as any]: noteBg(color, theme),

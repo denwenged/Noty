@@ -106,7 +106,7 @@ function NewBoard({ onClose, onCreated }: { onClose: () => void; onCreated: (b: 
   };
 
   return (
-    <Sheet onClose={onClose} maxWidth={440}>
+    <Sheet padded={false} onClose={onClose} maxWidth={440}>
       <>
         <div className="modal-head">
           <h2>New whiteboard</h2>

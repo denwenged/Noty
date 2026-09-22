@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Plus, Users, X, Search, Eye } from 'lucide-react';
+import { ArrowLeft, Plus, Users, X, Search, Eye, Check } from 'lucide-react';
 import { api, type CollectionDetail, type Note } from '../api';
 import { useApp } from '../store';
 import { noteBg, noteBorder } from '../colors';
@@ -58,8 +58,12 @@ export default function CollectionView() {
         />
         {col.shared && <span className="role-chip">{col.role}</span>}
         <div className="grow" />
+        <span className="muted hide-phone" style={{ fontSize: 13 }}>
+          {col.notes.length} {col.notes.length === 1 ? 'note' : 'notes'}
+        </span>
         <button className="btn icon ghost" title="Share collection" onClick={() => { haptic.tap(); setPeople(true); }}>
           <Users size={18} />
+          {col.memberCount > 1 && <span className="btn-dot">{col.memberCount}</span>}
         </button>
         {canEdit && (
           <button className="btn accent sm" onClick={() => { haptic.press(); setAdding(true); }}>
@@ -134,22 +138,25 @@ export default function CollectionView() {
   );
 }
 
-/** Pick notes to drop into the collection. */
+/** Pick notes to drop into the collection. Selection is a plain toggle. */
 function AddNotes({
   collectionId, already, onClose, onAdded,
 }: { collectionId: number; already: number[]; onClose: () => void; onAdded: () => void }) {
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [notes, setNotes] = useState<Note[] | null>(null);
   const [picked, setPicked] = useState<number[]>([]);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
   const { toast } = useApp();
 
   useEffect(() => {
-    api.get<Note[]>('/notes').then((all) => setNotes(all.filter((n) => !n.trashed))).catch(() => {});
+    api
+      .get<Note[]>('/notes')
+      .then((all) => setNotes(all.filter((n) => !n.trashed)))
+      .catch((e) => { toast(e.message, 'err'); setNotes([]); });
   }, []);
 
   const available = useMemo(() => {
-    const list = notes.filter((n) => !already.includes(n.id));
+    const list = (notes || []).filter((n) => !already.includes(n.id));
     if (!q.trim()) return list;
     const s = q.toLowerCase();
     return list.filter((n) => n.title.toLowerCase().includes(s) || n.content.toLowerCase().includes(s));
@@ -158,7 +165,6 @@ function AddNotes({
   const save = async () => {
     setBusy(true);
     try {
-      // Sequential keeps ordering predictable and errors attributable.
       for (const noteId of picked) {
         await api.post(`/collections/${collectionId}/notes`, { noteId });
       }
@@ -170,22 +176,42 @@ function AddNotes({
 
   return (
     <Sheet onClose={onClose} maxWidth={460}>
-      <h3 style={{ margin: '0 0 12px', fontFamily: 'var(--font-display)' }}>Add notes</h3>
-      <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-        <Search size={16} style={{ color: 'var(--text-faint)' }} />
+      <h3 style={{ margin: 0, fontFamily: 'var(--font-display)' }}>Add notes</h3>
+      <p className="muted" style={{ margin: '4px 0 14px', fontSize: 13 }}>
+        Pick as many as you like — tap again to deselect.
+      </p>
+
+      <div className="search-field">
+        <Search size={16} />
         <input
-          className="input no-drag"
+          className="no-drag"
           autoFocus
           placeholder="Search your notes"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        {q && (
+          <button className="sf-clear" title="Clear" onClick={() => setQ('')}>
+            <X size={14} />
+          </button>
+        )}
       </div>
 
       <div className="pick-list">
-        {available.length === 0 ? (
-          <div className="muted" style={{ fontSize: 13, padding: '14px 2px' }}>
-            {notes.length ? 'Every note is already in this collection.' : 'No notes yet.'}
+        {notes === null ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 50, borderRadius: 11, ['--i' as any]: i }} />
+          ))
+        ) : available.length === 0 ? (
+          <div className="pick-empty">
+            <Search size={22} />
+            <div>
+              {!notes.length
+                ? 'No notes yet.'
+                : q
+                  ? `Nothing matches “${q}”.`
+                  : 'Every note is already in this collection.'}
+            </div>
           </div>
         ) : (
           available.map((n) => {
@@ -194,14 +220,17 @@ function AddNotes({
               <button
                 key={n.id}
                 className={'pick-row' + (on ? ' on' : '')}
+                aria-pressed={on}
                 onClick={() => {
                   haptic.tap();
                   setPicked((p) => (on ? p.filter((x) => x !== n.id) : [...p, n.id]));
                 }}
               >
-                <span className={'pick-box' + (on ? ' on' : '')} />
+                <span className={'pick-box' + (on ? ' on' : '')}>
+                  {on && <Check size={12} strokeWidth={3.4} />}
+                </span>
                 <span className="grow" style={{ textAlign: 'left', minWidth: 0 }}>
-                  <span style={{ fontWeight: 650, display: 'block' }}>{n.title || 'Untitled'}</span>
+                  <span className="pick-name">{n.title || 'Untitled'}</span>
                   {n.content && <span className="pick-sub">{n.content.slice(0, 70)}</span>}
                 </span>
               </button>
@@ -210,11 +239,11 @@ function AddNotes({
         )}
       </div>
 
-      <div className="row" style={{ gap: 8, marginTop: 14 }}>
+      <div className="row" style={{ gap: 8, marginTop: 16 }}>
         <button className="btn ghost" onClick={onClose}>Cancel</button>
         <div className="grow" />
         <button className="btn primary" disabled={!picked.length || busy} onClick={save}>
-          {busy ? 'Adding…' : `Add ${picked.length || ''}`.trim()}
+          {busy ? 'Adding…' : picked.length ? `Add ${picked.length}` : 'Add'}
         </button>
       </div>
     </Sheet>

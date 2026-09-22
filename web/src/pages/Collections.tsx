@@ -70,13 +70,16 @@ export default function Collections() {
                 onClick={() => nav(`/collections/${c.id}`)}
               >
                 <div className="col-swatch" style={{ background: STICKY_COLORS[c.color] || STICKY_COLORS.violet }}>
-                  <FolderOpen size={22} />
+                  <FolderOpen size={20} />
+                  <span className="col-count">{c.noteCount}</span>
                 </div>
                 <div className="tile-title">{c.name}</div>
                 <div className="tile-sub">
                   {c.noteCount} {c.noteCount === 1 ? 'note' : 'notes'}
                   {c.memberCount > 1 && (
-                    <> · <Users size={12} style={{ verticalAlign: -2 }} /> {c.memberCount}</>
+                    <span className="col-people">
+                      <Users size={12} /> {c.memberCount}
+                    </span>
                   )}
                 </div>
                 {c.shared && <span className="role-chip float">{c.role}</span>}

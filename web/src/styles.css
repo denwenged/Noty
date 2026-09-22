@@ -1043,29 +1043,115 @@ kbd {
 
 /* note / collection picker lists */
 .pick-list {
-  margin-top: 12px; max-height: 320px; overflow-y: auto;
-  display: flex; flex-direction: column; gap: 3px;
+  margin-top: 12px;
+  max-height: min(46vh, 340px);
+  overflow-y: auto;
+  display: flex; flex-direction: column; gap: 4px;
+  scrollbar-width: thin;
 }
 .pick-row {
-  display: flex; align-items: center; gap: 11px;
-  padding: 10px 11px; border-radius: 11px;
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 12px; border-radius: 12px;
   border: 1.5px solid transparent; background: transparent;
   cursor: pointer; text-align: left; width: 100%;
-  color: var(--text); font-size: 14px; transition: var(--t-fast);
+  color: var(--text); font-size: 14px; font-family: inherit;
+  transition: background .15s, border-color .15s, transform .12s var(--bounce);
 }
 .pick-row:hover:not(:disabled) { background: var(--surface-2); }
-.pick-row.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.pick-row:disabled { opacity: .62; cursor: default; }
+.pick-row:active:not(:disabled) { transform: scale(.985); }
+.pick-row.on {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.pick-row:disabled { opacity: .6; cursor: progress; }
+.pick-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .pick-box {
-  width: 19px; height: 19px; border-radius: 6px; flex-shrink: 0;
-  border: 2px solid var(--border); transition: var(--t-fast);
+  width: 20px; height: 20px; border-radius: 6px; flex-shrink: 0;
+  border: 2px solid var(--border-strong);
+  display: grid; place-items: center; color: #fff;
+  transition: background .15s, border-color .15s, transform .16s var(--bounce);
 }
 .pick-box.on {
   background: var(--accent); border-color: var(--accent);
-  box-shadow: inset 0 0 0 3px var(--surface);
+  transform: scale(1.06);
+}
+.pick-name {
+  font-weight: 650; display: block;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .pick-sub {
   display: block; font-size: 12px; color: var(--text-faint); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.pick-empty {
+  display: flex; flex-direction: column; align-items: center; gap: 9px;
+  padding: 28px 12px; color: var(--text-faint); font-size: 13px; text-align: center;
+}
+
+/* search field used inside sheets */
+.search-field {
+  display: flex; align-items: center; gap: 9px;
+  padding: 0 12px; border-radius: 12px;
+  border: 1.5px solid var(--border); background: var(--surface-2);
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.search-field > svg { color: var(--text-faint); flex-shrink: 0; }
+.search-field input {
+  flex: 1; border: none; background: transparent; outline: none;
+  padding: 11px 0; font-size: 14px; color: var(--text); font-family: inherit;
+}
+.sf-clear {
+  border: none; background: transparent; cursor: pointer; color: var(--text-faint);
+  display: grid; place-items: center; padding: 4px; border-radius: 7px;
+}
+.sf-clear:hover { color: var(--text); background: var(--surface); }
+
+.spinner.sm { width: 14px; height: 14px; border-width: 2px; }
+
 .swatch-btn { width: 30px; height: 30px; border-radius: 9px; border: none; cursor: pointer; }
+
+/* ==============================================================
+   SHEET / DIALOG POLISH
+   Sheets given plain children (no modal-head/body/foot) were
+   sitting flush against the border. Pad them properly and let
+   long content scroll instead of overflowing.
+   ============================================================== */
+.modal-padded {
+  padding: 22px;
+  overflow-y: auto;
+  gap: 0;
+}
+.modal-padded > h3 { flex-shrink: 0; }
+@media (max-width: 860px) {
+  /* Leave room for the grabber and the home indicator. */
+  .modal-padded { padding: 6px 18px calc(20px + env(safe-area-inset-bottom)); }
+}
+
+/* Scrollable regions inside a padded sheet shouldn't clip their focus rings. */
+.modal-padded .pick-list { margin-left: -4px; margin-right: -4px; padding: 0 4px; }
+
+/* collection tiles */
+.col-tile .col-swatch { position: relative; }
+.col-count {
+  position: absolute; right: 9px; bottom: 7px;
+  font-family: var(--font-display); font-size: 21px; font-weight: 800;
+  color: rgba(0,0,0,.36); line-height: 1;
+}
+.col-people {
+  display: inline-flex; align-items: center; gap: 3px; margin-left: 7px;
+  padding-left: 7px; border-left: 1px solid var(--border);
+}
+.col-people svg { vertical-align: -1px; }
+.btn-dot {
+  position: absolute; top: -3px; right: -3px;
+  min-width: 15px; height: 15px; padding: 0 3px; border-radius: 99px;
+  background: var(--accent); color: #fff;
+  font-size: 9.5px; font-weight: 800; line-height: 15px; text-align: center;
+}
+.btn.icon { position: relative; }
+@media (max-width: 860px) { .hide-phone { display: none; } }

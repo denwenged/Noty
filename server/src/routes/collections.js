@@ -67,6 +67,22 @@ const shape = (c, req) => ({
   updatedAt: c.updated_at,
 });
 
+/**
+ * Which collections a given note sits in, limited to ones the caller can see.
+ * Lets the note editor show current membership instead of guessing.
+ */
+r.get('/for-note/:noteId', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT c.id FROM collection_notes cn
+       JOIN collections c ON c.id = cn.collection_id
+       LEFT JOIN collection_collaborators cc ON cc.collection_id = c.id AND cc.user_id = ?
+       WHERE cn.note_id = ? AND (c.user_id = ? OR cc.user_id IS NOT NULL)`
+    )
+    .all(req.user.id, req.params.noteId, req.user.id);
+  res.json(rows.map((x) => x.id));
+});
+
 /* ----------------------------- collections ----------------------------- */
 
 r.get('/', (req, res) => {

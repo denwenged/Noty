@@ -1751,7 +1751,7 @@ function CanvasConfig({
   const [h, setH] = useState(board.canvasH);
 
   return (
-    <Sheet onClose={onClose} maxWidth={440}>
+    <Sheet padded={false} onClose={onClose} maxWidth={440}>
       <>
         <div className="modal-head">
           <h2>Canvas</h2>

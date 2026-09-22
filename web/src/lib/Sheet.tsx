@@ -14,12 +14,15 @@ export default function Sheet({
   maxWidth = 620,
   style,
   className = '',
+  padded = true,
 }: {
   children: React.ReactNode;
   onClose: () => void;
   maxWidth?: number;
   style?: React.CSSProperties;
   className?: string;
+  /** Pad the content. Turn off when the caller supplies modal-head/body/foot. */
+  padded?: boolean;
 }) {
   const phone = useIsPhone();
   const [y, setY] = useState(0);
@@ -83,7 +86,7 @@ export default function Sheet({
     >
       <div
         ref={sheetRef}
-        className={`modal ${className} ${dragging ? 'dragging' : ''} ${closing ? 'closing' : ''}`}
+        className={`modal ${padded ? 'modal-padded' : ''} ${className} ${dragging ? 'dragging' : ''} ${closing ? 'closing' : ''}`}
         style={{
           maxWidth,
           transform: phone && y ? `translateY(${y}px)` : undefined,
