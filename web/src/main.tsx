@@ -6,6 +6,8 @@ import Shell from './Shell';
 import Auth from './pages/Auth';
 import Notes from './pages/Notes';
 import Boards from './pages/Boards';
+import Collections from './pages/Collections';
+import CollectionView from './pages/CollectionView';
 import Board from './pages/Board';
 import SettingsPage from './pages/Settings';
 import Admin from './pages/Admin';
@@ -32,6 +34,8 @@ function Gate() {
           <Route path="/pinned" element={<Notes view="pinned" />} />
           <Route path="/archive" element={<Notes view="archive" />} />
           <Route path="/trash" element={<Notes view="trash" />} />
+          <Route path="/collections" element={<Collections />} />
+          <Route path="/collections/:id" element={<CollectionView />} />
           <Route path="/boards" element={<Boards />} />
           <Route path="/boards/:id" element={<Board />} />
           <Route path="/settings" element={<SettingsPage />} />

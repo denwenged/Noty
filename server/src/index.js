@@ -11,6 +11,7 @@ import noteRoutes from './routes/notes.js';
 import boardRoutes from './routes/boards.js';
 import fileRoutes from './routes/files.js';
 import miscRoutes from './routes/misc.js';
+import collectionRoutes from './routes/collections.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -24,6 +25,7 @@ app.get('/api/health', (_req, res) =>
 app.use('/api/auth', authRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/boards', boardRoutes);
+app.use('/api/collections', collectionRoutes);
 app.use('/api/files', fileRoutes);
 app.use('/api', miscRoutes);
 

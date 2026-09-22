@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   StickyNote, LayoutDashboard, Link2, Plus, Settings, Search, ArrowRight, Moon,
+  FolderOpen,
 } from 'lucide-react';
 import { api } from './api';
 import { useApp } from './store';
@@ -10,7 +11,7 @@ type Row = { icon: any; label: string; hint?: string; run: () => void };
 
 export default function CommandPalette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState('');
-  const [res, setRes] = useState<any>({ notes: [], boards: [], links: [] });
+  const [res, setRes] = useState<any>({ notes: [], boards: [], collections: [], links: [] });
   const [i, setI] = useState(0);
   const nav = useNavigate();
   const { updateUser, user } = useApp();
@@ -19,7 +20,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   useEffect(() => {
-    if (!q.trim()) return setRes({ notes: [], boards: [], links: [] });
+    if (!q.trim()) return setRes({ notes: [], boards: [], collections: [], links: [] });
     const t = setTimeout(() => {
       api.get(`/search?q=${encodeURIComponent(q)}`).then(setRes).catch(() => {});
     }, 180);
@@ -30,6 +31,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
     const go = (p: string) => () => { nav(p); onClose(); };
     const base: Row[] = [
       { icon: Plus, label: 'New note', hint: 'N', run: go('/notes?new=1') },
+      { icon: FolderOpen, label: 'Collections', hint: 'G C', run: go('/collections') },
       { icon: LayoutDashboard, label: 'Whiteboards', hint: 'G B', run: go('/boards') },
       { icon: StickyNote, label: 'All notes', hint: 'G N', run: go('/notes') },
       { icon: Settings, label: 'Settings', hint: 'G P', run: go('/settings') },
@@ -43,6 +45,9 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         run: go(`/notes?open=${n.id}`),
       })),
       ...res.boards.map((b: any) => ({ icon: LayoutDashboard, label: b.name, hint: 'board', run: go(`/boards/${b.id}`) })),
+      ...(res.collections || []).map((c: any) => ({
+        icon: FolderOpen, label: c.name, hint: 'collection', run: go(`/collections/${c.id}`),
+      })),
       ...res.links.map((l: any) => ({
         icon: Link2,
         label: l.title || l.url,
@@ -77,7 +82,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
           <Search size={19} style={{ color: 'var(--text-faint)' }} />
           <input
             ref={inputRef}
-            placeholder="Search notes, boards, links… or type a command"
+            placeholder="Search notes, collections, boards… or type a command"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {

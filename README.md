@@ -32,6 +32,18 @@ in your notes, and proper multi-user accounts. Installs to your phone's home scr
   selection bar, or `]` and `[` (add Shift to jump to the very front or back).
 - **Replace images** — swap the photo in an existing image frame without recreating it.
 
+### Collections
+
+Group related notes and share the whole group with other people:
+
+- Create a collection, then add any of your notes to it (a note can live in several).
+- Invite by username as an **editor** (can add, remove and edit the notes inside) or a
+  **viewer** (read-only). Only the owner can invite, remove people or delete the collection.
+- Shared notes appear in the members' own note list, so they can edit them in place.
+- Removing a note from a collection, or deleting the collection entirely, **never deletes the
+  notes** — it only breaks the grouping and revokes access.
+- Reach them from the sidebar, the `Sets` tab on phones, `G` then `C`, or the command palette.
+
 ### Live collaboration
 
 Invite other Noty users to a board and edit it together in real time:

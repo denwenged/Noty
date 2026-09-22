@@ -2,9 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Pin, PinOff, Archive, Trash2, Share2, ImagePlus, X, Plus, Check, Link2,
-  ArchiveRestore, RotateCcw, Copy, Search, ExternalLink,
+  ArchiveRestore, RotateCcw, Copy, Search, ExternalLink, FolderOpen,
 } from 'lucide-react';
-import { api, uploadImage, type Note, type NoteLink } from '../api';
+import { api, uploadImage, type Note, type NoteLink, type Collection } from '../api';
 import { useApp } from '../store';
 import { NOTE_COLORS, noteBg, noteBorder, faviconFor, hostOf } from '../colors';
 import { haptic } from '../lib/haptics';
@@ -426,6 +426,65 @@ function NoteCard({
   );
 }
 
+/** Put a note into one or more collections you can write to. */
+function FileIntoCollection({ noteId, onClose }: { noteId: number; onClose: () => void }) {
+  const [cols, setCols] = useState<Collection[]>([]);
+  const [busy, setBusy] = useState<number | null>(null);
+  const [done, setDone] = useState<number[]>([]);
+  const { toast } = useApp();
+
+  useEffect(() => {
+    api
+      .get<Collection[]>('/collections')
+      .then((all) => setCols(all.filter((c) => c.role !== 'viewer')))
+      .catch(() => {});
+  }, []);
+
+  const add = async (c: Collection) => {
+    setBusy(c.id);
+    try {
+      await api.post(`/collections/${c.id}/notes`, { noteId });
+      setDone((d) => [...d, c.id]);
+      haptic.success();
+      toast(`Added to ${c.name}`);
+    } catch (e: any) { toast(e.message, 'err'); }
+    finally { setBusy(null); }
+  };
+
+  return (
+    <Sheet onClose={onClose} maxWidth={400}>
+      <h3 style={{ margin: '0 0 12px', fontFamily: 'var(--font-display)' }}>Add to collection</h3>
+      <div className="pick-list">
+        {cols.length === 0 ? (
+          <div className="muted" style={{ fontSize: 13, padding: '12px 2px' }}>
+            No collections you can write to yet.
+          </div>
+        ) : (
+          cols.map((c) => (
+            <button
+              key={c.id}
+              className={'pick-row' + (done.includes(c.id) ? ' on' : '')}
+              disabled={busy === c.id || done.includes(c.id)}
+              onClick={() => add(c)}
+            >
+              <span className={'pick-box' + (done.includes(c.id) ? ' on' : '')} />
+              <span className="grow" style={{ textAlign: 'left' }}>
+                <span style={{ fontWeight: 650 }}>{c.name}</span>
+                {c.shared && <span className="role-chip sm" style={{ marginLeft: 7 }}>{c.role}</span>}
+              </span>
+              {busy === c.id && <span className="spinner" />}
+            </button>
+          ))
+        )}
+      </div>
+      <div className="row" style={{ marginTop: 14 }}>
+        <div className="grow" />
+        <button className="btn primary" onClick={onClose}>Done</button>
+      </div>
+    </Sheet>
+  );
+}
+
 function Editor({
   note, onClose, onChange, onDelete,
 }: {
@@ -445,6 +504,7 @@ function Editor({
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [addingLink, setAddingLink] = useState(false);
+  const [filing, setFiling] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const timer = useRef<any>(null);
 
@@ -636,12 +696,17 @@ function Editor({
           </div>
         </div>
 
+        {filing && <FileIntoCollection noteId={note.id} onClose={() => setFiling(false)} />}
+
         <div className="modal-foot">
           <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => doUpload(e.target.files)} />
           <button className="btn sm" onClick={() => fileRef.current?.click()} disabled={uploading}>
             {uploading ? <div className="spinner" /> : <ImagePlus size={15} />} Image
           </button>
           <button className="btn sm" onClick={() => setAddingLink(true)}><Link2 size={15} /> Link</button>
+          <button className="btn sm" title="Add to a collection" onClick={() => setFiling(true)}>
+            <FolderOpen size={15} /> Collection
+          </button>
           <button className="btn icon sm" title="Share" onClick={share}><Share2 size={15} /></button>
           <button className="btn icon sm" title="Copy text" onClick={() => { navigator.clipboard.writeText(content); toast('Copied'); }}>
             <Copy size={15} />

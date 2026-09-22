@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { db } from '../db.js';
 import { requireAuth } from '../auth.js';
+import { noteVisibleTo, noteEditableVia } from './collections.js';
 
 const r = Router();
 r.use(requireAuth);
@@ -19,13 +20,30 @@ const shape = (n) => ({
   reminderAt: n.reminder_at,
   createdAt: n.created_at,
   updatedAt: n.updated_at,
+  ownerId: n.user_id,
 });
 
 r.get('/', (req, res) => {
+  // Own notes, plus any note shared with us through a collection.
   const rows = db
-    .prepare('SELECT * FROM notes WHERE user_id=? ORDER BY pinned DESC, updated_at DESC')
-    .all(req.user.id);
+    .prepare(
+      `SELECT DISTINCT n.* FROM notes n
+       LEFT JOIN collection_notes cn ON cn.note_id = n.id
+       LEFT JOIN collections c ON c.id = cn.collection_id
+       LEFT JOIN collection_collaborators cc ON cc.collection_id = c.id AND cc.user_id = ?
+       WHERE n.user_id = ? OR cc.user_id IS NOT NULL
+       ORDER BY n.pinned DESC, n.updated_at DESC`
+    )
+    .all(req.user.id, req.user.id);
   res.json(rows.map(shape));
+});
+
+r.get('/:id', (req, res) => {
+  const n = db.prepare('SELECT * FROM notes WHERE id=?').get(req.params.id);
+  if (!n) return res.status(404).json({ error: 'Not found' });
+  if (n.user_id !== req.user.id && !noteVisibleTo(req.user.id, n.id))
+    return res.status(404).json({ error: 'Not found' });
+  res.json(shape(n));
 });
 
 r.post('/', (req, res) => {
@@ -50,9 +68,12 @@ r.post('/', (req, res) => {
 });
 
 r.patch('/:id', (req, res) => {
-  const n = db
-    .prepare('SELECT * FROM notes WHERE id=? AND user_id=?')
-    .get(req.params.id, req.user.id);
+  let n = db.prepare('SELECT * FROM notes WHERE id=? AND user_id=?').get(req.params.id, req.user.id);
+  if (!n) {
+    // Not ours — but a collection we can edit may grant access.
+    const shared = db.prepare('SELECT * FROM notes WHERE id=?').get(req.params.id);
+    if (shared && noteEditableVia(req.user.id, shared.id)) n = shared;
+  }
   if (!n) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
   db.prepare(

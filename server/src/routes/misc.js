@@ -131,9 +131,17 @@ r.get('/search', requireAuth, (req, res) => {
       if (links.length >= 20) break;
     }
   }
+  const collections = db
+    .prepare(
+      `SELECT DISTINCT c.* FROM collections c
+       LEFT JOIN collection_collaborators cc ON cc.collection_id = c.id AND cc.user_id = ?
+       WHERE (c.user_id = ? OR cc.user_id IS NOT NULL) AND lower(c.name) LIKE ? LIMIT 20`
+    )
+    .all(req.user.id, req.user.id, q);
   res.json({
     notes: notes.map((n) => ({ id: n.id, title: n.title, content: n.content, color: n.color })),
     boards: boards.map((b) => ({ id: b.id, name: b.name })),
+    collections: collections.map((c) => ({ id: c.id, name: c.name, color: c.color })),
     links,
   });
 });
@@ -146,6 +154,12 @@ r.get('/stats', requireAuth, (req, res) => {
     archived: one('SELECT COUNT(*) c FROM notes WHERE user_id=? AND archived=1'),
     trashed: one('SELECT COUNT(*) c FROM notes WHERE user_id=? AND trashed=1'),
     boards: one('SELECT COUNT(*) c FROM boards WHERE user_id=?'),
+    collections: one(
+      `SELECT COUNT(DISTINCT c.id) c FROM collections c
+       LEFT JOIN collection_collaborators cc ON cc.collection_id = c.id AND cc.user_id = ?
+       WHERE c.user_id = ? OR cc.user_id IS NOT NULL`,
+      req.user.id
+    ),
     images: one('SELECT COUNT(*) c FROM files WHERE user_id=?'),
   });
 });

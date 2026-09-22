@@ -1002,3 +1002,70 @@ kbd {
 
 /* Never drag images/links as browser ghost images. */
 .board-canvas img, .board-canvas a { -webkit-user-drag: none; user-drag: none; }
+
+/* ==============================================================
+   COLLECTIONS
+   ============================================================== */
+
+.col-tile .col-swatch {
+  height: 74px; border-radius: 13px;
+  display: grid; place-items: center; color: rgba(0,0,0,.52);
+  box-shadow: inset 0 -18px 30px -22px rgba(0,0,0,.45);
+}
+.col-tile .tile-del {
+  position: absolute; top: 9px; right: 9px;
+  width: 28px; height: 28px; border-radius: 9px;
+  display: grid; place-items: center; cursor: pointer;
+  border: none; color: var(--text-dim);
+  background: color-mix(in srgb, var(--surface) 84%, transparent);
+  backdrop-filter: blur(8px);
+  opacity: 0; transition: opacity .16s, color .16s;
+}
+.col-tile:hover .tile-del { opacity: 1; }
+.col-tile .tile-del:hover { color: #e5326b; }
+
+.role-chip {
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em;
+  padding: 3px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+.role-chip.sm { font-size: 9.5px; padding: 2px 6px; }
+.role-chip.float { position: absolute; top: 9px; left: 9px; }
+
+.readonly-banner {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 13px; margin-bottom: 16px;
+  border-radius: var(--r-md); font-size: 13px;
+  background: color-mix(in srgb, #f5b800 16%, transparent);
+  color: var(--text);
+}
+
+/* note / collection picker lists */
+.pick-list {
+  margin-top: 12px; max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 3px;
+}
+.pick-row {
+  display: flex; align-items: center; gap: 11px;
+  padding: 10px 11px; border-radius: 11px;
+  border: 1.5px solid transparent; background: transparent;
+  cursor: pointer; text-align: left; width: 100%;
+  color: var(--text); font-size: 14px; transition: var(--t-fast);
+}
+.pick-row:hover:not(:disabled) { background: var(--surface-2); }
+.pick-row.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.pick-row:disabled { opacity: .62; cursor: default; }
+.pick-box {
+  width: 19px; height: 19px; border-radius: 6px; flex-shrink: 0;
+  border: 2px solid var(--border); transition: var(--t-fast);
+}
+.pick-box.on {
+  background: var(--accent); border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--surface);
+}
+.pick-sub {
+  display: block; font-size: 12px; color: var(--text-faint); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.swatch-btn { width: 30px; height: 30px; border-radius: 9px; border: none; cursor: pointer; }

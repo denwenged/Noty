@@ -65,7 +65,26 @@ export type Note = {
   reminderAt: string | null;
   createdAt: string;
   updatedAt: string;
+  ownerId?: number;
 };
+
+export type CollectionRole = 'owner' | 'editor' | 'viewer';
+
+export type Collection = {
+  id: number;
+  name: string;
+  color: string;
+  icon: string | null;
+  ownerId: number;
+  role: CollectionRole;
+  shared: boolean;
+  noteCount: number;
+  memberCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CollectionDetail = Collection & { notes: Note[] };
 
 export type CanvasMode = 'infinite' | 'fixed';
 

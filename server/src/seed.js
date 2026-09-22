@@ -19,7 +19,11 @@ if (existing && !force) {
 }
 
 if (force) {
-  db.exec('DELETE FROM board_items; DELETE FROM board_collaborators; DELETE FROM boards; DELETE FROM notes; DELETE FROM shares; DELETE FROM users;');
+  db.exec(
+    'DELETE FROM board_items; DELETE FROM board_collaborators; DELETE FROM boards; ' +
+    'DELETE FROM collection_notes; DELETE FROM collection_collaborators; DELETE FROM collections; ' +
+    'DELETE FROM notes; DELETE FROM shares; DELETE FROM users;'
+  );
   console.log('[seed] cleared existing content');
 }
 
@@ -31,9 +35,17 @@ const uid = Number(user.lastInsertRowid);
 const note = db.prepare(
   'INSERT INTO notes (user_id,title,content,color,pinned,links) VALUES (?,?,?,?,?,?)'
 );
-note.run(uid, 'Welcome to Noty', 'Everything here is yours alone. Try the boards!', 'yellow', 1, '[]');
-note.run(uid, 'Shopping list', '- Coffee beans\n- Oat milk\n- Cinnamon', 'mint', 0, '[]');
-note.run(uid, 'Reading', 'Papers to get through this month.', 'sky', 0, '[]');
+const n1 = Number(note.run(uid, 'Welcome to Noty', 'Everything here is yours alone. Try the boards!', 'yellow', 1, '[]').lastInsertRowid);
+const n2 = Number(note.run(uid, 'Shopping list', '- Coffee beans\n- Oat milk\n- Cinnamon', 'mint', 0, '[]').lastInsertRowid);
+const n3 = Number(note.run(uid, 'Reading', 'Papers to get through this month.', 'sky', 0, '[]').lastInsertRowid);
+
+// A collection grouping a couple of those notes.
+const colId = Number(
+  db.prepare('INSERT INTO collections (user_id,name,color) VALUES (?,?,?)').run(uid, 'Home', 'mint').lastInsertRowid
+);
+const inCol = db.prepare('INSERT OR IGNORE INTO collection_notes (collection_id,note_id) VALUES (?,?)');
+inCol.run(colId, n2);
+inCol.run(colId, n3);
 
 const board = db.prepare(
   'INSERT INTO boards (user_id,name,background,canvas_mode,canvas_w,canvas_h) VALUES (?,?,?,?,?,?)'
@@ -77,4 +89,7 @@ add(b2, 'shape', 160, 400, 420, 260, 3, 'mint', { shape: 'rect' });
 add(b2, 'sticky', 700, 420, 220, 200, 4, 'yellow', { text: 'Launch day!' }, 3);
 
 console.log('[seed] created user "demo" (password: demo1234)');
-console.log(`[seed] 3 notes, 2 boards, ${db.prepare('SELECT COUNT(*) c FROM board_items').get().c} board items`);
+console.log(
+  `[seed] 3 notes, 1 collection, 2 boards, ${db.prepare('SELECT COUNT(*) c FROM board_items').get().c} board items`
+);
+void n1;

@@ -108,6 +108,34 @@ CREATE TABLE IF NOT EXISTS files (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS collections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT 'violet',
+  icon TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_collections_user ON collections(user_id);
+
+CREATE TABLE IF NOT EXISTS collection_notes (
+  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  added_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (collection_id, note_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cn_note ON collection_notes(note_id);
+
+CREATE TABLE IF NOT EXISTS collection_collaborators (
+  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'editor',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (collection_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_cc_user ON collection_collaborators(user_id);
+
 CREATE TABLE IF NOT EXISTS board_collaborators (
   board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
   user_id  INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,

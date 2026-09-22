@@ -3,6 +3,7 @@ import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
   Sparkles, StickyNote, Pin, LayoutDashboard, Settings as Cog,
   Archive, Trash2, Shield, LogOut, Menu, Search, Plus,
+  FolderOpen,
 } from 'lucide-react';
 import { useApp } from './store';
 import { api } from './api';
@@ -31,7 +32,7 @@ export default function Shell() {
       if (typing) return;
       if (e.key.toLowerCase() === 'g') { g = true; setTimeout(() => (g = false), 900); return; }
       if (g) {
-        const map: Record<string, string> = { n: '/notes', b: '/boards', p: '/settings' };
+        const map: Record<string, string> = { n: '/notes', b: '/boards', c: '/collections', p: '/settings' };
         if (map[e.key.toLowerCase()]) { nav(map[e.key.toLowerCase()]); g = false; }
         return;
       }
@@ -77,6 +78,7 @@ export default function Shell() {
         <Item to="/trash" icon={Trash2} label="Trash" count={stats.trashed} />
 
         <div className="nav-label">Workspace</div>
+        <Item to="/collections" icon={FolderOpen} label="Collections" count={stats.collections} />
         <Item to="/boards" icon={LayoutDashboard} label="Whiteboards" count={stats.boards} />
 
         <div className="nav-label">Account</div>
@@ -150,6 +152,9 @@ function TabBar({ onMore, onSearch }: { onMore: () => void; onSearch: () => void
       <div className="tabbar-inner">
         <button className={'tab' + (is('/notes') ? ' on' : '')} onClick={go('/notes')}>
           <StickyNote className="tab-ico" size={21} /> Notes
+        </button>
+        <button className={'tab' + (loc.pathname.startsWith('/collections') ? ' on' : '')} onClick={go('/collections')}>
+          <FolderOpen className="tab-ico" size={21} /> Sets
         </button>
         <button className={'tab' + (loc.pathname.startsWith('/boards') ? ' on' : '')} onClick={go('/boards')}>
           <LayoutDashboard className="tab-ico" size={21} /> Boards
