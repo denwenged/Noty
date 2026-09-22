@@ -41,6 +41,14 @@ export type NoteLink = {
   description?: string;
   favicon?: string;
   image?: string | null;
+  siteName?: string | null;
+  isProduct?: boolean;
+  price?: number | null;
+  currency?: string | null;
+  priceFormatted?: string | null;
+  listPriceFormatted?: string | null;
+  discountPercent?: number | null;
+  availability?: string | null;
 };
 
 export type Note = {
@@ -75,7 +83,7 @@ export type BoardSummary = {
 export type BoardItem = {
   id: number;
   boardId: number;
-  type: 'sticky' | 'link' | 'image' | 'text' | 'todo';
+  type: 'sticky' | 'link' | 'image' | 'text' | 'todo' | 'shape' | 'draw';
   x: number;
   y: number;
   w: number;

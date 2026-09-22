@@ -392,7 +392,17 @@ function NoteCard({
                 <img src={l.favicon || faviconFor(l.url)} alt="" onError={(e) => ((e.target as HTMLElement).style.visibility = 'hidden')} />
                 <div className="lp-text">
                   <div className="lp-title">{l.title || hostOf(l.url)}</div>
-                  <div className="lp-host">{hostOf(l.url)}</div>
+                  <div className="lp-host">
+                    {l.isProduct && l.priceFormatted ? (
+                      <>
+                        <b style={{ color: 'var(--text)' }}>{l.priceFormatted}</b>
+                        {l.listPriceFormatted && <s style={{ marginLeft: 5 }}>{l.listPriceFormatted}</s>}
+                        {l.discountPercent ? <span className="lp-off">-{l.discountPercent}%</span> : null}
+                      </>
+                    ) : (
+                      hostOf(l.url)
+                    )}
+                  </div>
                 </div>
                 <ExternalLink size={13} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
               </a>
@@ -557,7 +567,18 @@ function Editor({
                   )}
                   <div className="lp-text">
                     <div className="lp-title">{l.title || hostOf(l.url)}</div>
-                    <div className="lp-host">{hostOf(l.url)}</div>
+                    <div className="lp-host">
+                      {l.isProduct && l.priceFormatted ? (
+                        <>
+                          <b style={{ color: 'var(--text)' }}>{l.priceFormatted}</b>
+                          {l.listPriceFormatted && <s style={{ marginLeft: 5 }}>{l.listPriceFormatted}</s>}
+                          {l.discountPercent ? <span className="lp-off">-{l.discountPercent}%</span> : null}
+                          <span style={{ marginLeft: 6, opacity: .7 }}>· {hostOf(l.url)}</span>
+                        </>
+                      ) : (
+                        hostOf(l.url)
+                      )}
+                    </div>
                   </div>
                   <a className="btn icon ghost sm" href={l.url} target="_blank" rel="noopener"><ExternalLink size={14} /></a>
                   <button className="btn icon ghost sm" onClick={() => setLinks(links.filter((_, j) => j !== i))}><X size={14} /></button>

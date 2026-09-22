@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, StickyNote, Link2, ImagePlus, Trash2, Copy, Share2, ZoomIn, ZoomOut,
   Maximize, Palette, Grid3x3, Type, CheckSquare, Square, Plus, X, Frame,
+  Shapes, Pencil, Check, Eraser,
 } from 'lucide-react';
 import { api, uploadImage, CANVAS_PRESETS, type Board as BoardT, type BoardItem } from '../api';
 import { useApp } from '../store';
@@ -28,8 +29,15 @@ export default function Board() {
   const [showColors, setShowColors] = useState(false);
   const [showCanvasCfg, setShowCanvasCfg] = useState(false);
   const [fresh, setFresh] = useState<number | null>(null);
+  const [tool, setTool] = useState<'select' | 'draw' | 'erase'>('select');
+  const [penColor, setPenColor] = useState('#e5326b');
+  const [penWidth, setPenWidth] = useState(4);
+  const [showShapes, setShowShapes] = useState(false);
+  const [liveStroke, setLiveStroke] = useState<number[][] | null>(null);
+  const strokes = useRef<{ pts: number[][]; c: string; w: number }[]>([]);
   const [dropped, setDropped] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
+  const canvasEl = useRef<HTMLDivElement>(null);
   const pointers = useRef<Map<number, { x: number; y: number }>>(new Map());
   const pinch = useRef<{ dist: number; k: number; cx: number; cy: number; vx: number; vy: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -147,14 +155,37 @@ export default function Board() {
       setDrag(null);
       return;
     }
-    if (e.target !== e.currentTarget) return;
+    // Background = anything that isn't an item. On a fixed board the page
+    // rectangle sits above the canvas, so target !== currentTarget there.
+    // Drawing mode: capture strokes in board coordinates
+    if (tool === 'draw') {
+      const p = toBoardCoords(e.clientX, e.clientY);
+      setLiveStroke([[Math.round(p.x), Math.round(p.y)]]);
+      capture(e.pointerId);
+      return;
+    }
+    const onItem = (e.target as HTMLElement).closest('.sticky, .board-item, .resize-handle, .item-bar');
+    if (onItem) return;
+    if (e.button !== undefined && e.button !== 0 && e.button !== 1) return;
     setSel(null);
     setShowColors(false);
     setDrag({ kind: 'pan', sx: e.clientX, sy: e.clientY, ox: view.x, oy: view.y });
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    capture(e.pointerId);
+  };
+
+  /** Capture on the element that actually owns the pointer handlers. */
+  const capture = (pointerId: number) => {
+    try { canvasEl.current?.setPointerCapture(pointerId); } catch { /* ignore */ }
   };
 
   const onPointerMove = (e: React.PointerEvent) => {
+    if (liveStroke) {
+      if (e.pointerType === 'mouse' && e.buttons === 0) { finishStroke(); return; }
+      const p = toBoardCoords(e.clientX, e.clientY);
+      setLiveStroke((st) => (st ? [...st, [Math.round(p.x), Math.round(p.y)]] : st));
+      return;
+    }
+    if (drag && e.pointerType === 'mouse' && e.buttons === 0) { onPointerUp(e); return; }
     if (pointers.current.has(e.pointerId))
       pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
@@ -162,7 +193,7 @@ export default function Board() {
       const [a, b] = [...pointers.current.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       const p = pinch.current;
-      const k = Math.min(2.5, Math.max(0.25, p.k * (d / p.dist)));
+      const k = Math.min(4, Math.max(0.1, p.k * (d / p.dist)));
       setView({
         k,
         x: p.cx - ((p.cx - p.vx) / p.k) * k,
@@ -187,7 +218,15 @@ export default function Board() {
       );
   };
 
+  const finishStroke = () => {
+    setLiveStroke((st) => {
+      if (st && st.length > 1) strokes.current.push({ pts: st, c: penColor, w: penWidth });
+      return null;
+    });
+  };
+
   const onPointerUp = (e?: React.PointerEvent) => {
+    if (liveStroke) { finishStroke(); if (e) pointers.current.delete(e.pointerId); return; }
     if (e) pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
     if (drag && drag.kind !== 'pan') {
@@ -209,30 +248,41 @@ export default function Board() {
     const z = maxZ() + 1;
     if (it.z < z - 1) update(it.id, { z });
     setDrag({ kind: 'move', id: it.id, sx: e.clientX, sy: e.clientY, ix: it.x, iy: it.y });
-    wrap.current?.setPointerCapture(e.pointerId);
+    capture(e.pointerId);
   };
 
   const startResize = (e: React.PointerEvent, it: BoardItem) => {
     e.stopPropagation();
     setDrag({ kind: 'resize', id: it.id, sx: e.clientX, sy: e.clientY, iw: it.w, ih: it.h });
-    wrap.current?.setPointerCapture(e.pointerId);
+    capture(e.pointerId);
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
+  // Native, non-passive wheel handling (React's onWheel is passive → preventDefault is ignored)
+  useEffect(() => {
+    const el = canvasEl.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
       e.preventDefault();
       const r = wrap.current!.getBoundingClientRect();
-      const k = Math.min(2.5, Math.max(0.25, view.k * (1 - e.deltaY * 0.002)));
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        setView((v) => ({ ...v, x: v.x - (e.deltaX || e.deltaY) }));
+        return;
+      }
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
+      const dy = e.deltaY * unit;
       const mx = e.clientX - r.left, my = e.clientY - r.top;
-      setView((v) => ({ k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }));
-    } else {
-      setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
-    }
-  };
+      setView((v) => {
+        const k = Math.min(4, Math.max(0.1, v.k * Math.exp(-dy * 0.0015)));
+        return { k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k };
+      });
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, [board?.id]);
 
   const zoomBy = (f: number) => {
     const r = wrap.current!.getBoundingClientRect();
-    const k = Math.min(2.5, Math.max(0.25, view.k * f));
+    const k = Math.min(4, Math.max(0.1, view.k * f));
     const mx = r.width / 2, my = r.height / 2;
     setView((v) => ({ k, x: mx - ((mx - v.x) / v.k) * k, y: my - ((my - v.y) / v.k) * k }));
   };
@@ -261,11 +311,19 @@ export default function Board() {
       if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); removeItem(sel); }
       if (e.key.toLowerCase() === 'n') addItem({ type: 'sticky', data: { text: '' } });
       if (e.key.toLowerCase() === 'f') fit();
-      if (e.key === 'Escape') setSel(null);
+      if (e.key.toLowerCase() === 'd') {
+        if (tool === 'draw') commitDrawing();
+        else { setTool('draw'); setSel(null); }
+      }
+      if (e.key === 'Escape') {
+        if (tool === 'draw') { strokes.current = []; setLiveStroke(null); setTool('select'); }
+        setSel(null);
+        setShowShapes(false);
+      }
     };
     window.addEventListener('keydown', k);
     return () => window.removeEventListener('keydown', k);
-  }, [sel, items, view]);
+  }, [sel, items, view, tool, penColor, penWidth]);
 
   async function addLink() {
     const url = prompt('Paste a URL to pin on the board');
@@ -285,6 +343,28 @@ export default function Board() {
         await addItem({ type: 'image', w: 280, h: 220, rotation: 0, data: { url: up.url } });
       } catch (e: any) { toast(e.message, 'err'); }
     }
+  }
+
+  /** Turn the in-progress strokes into a saved drawing item. */
+  async function commitDrawing() {
+    const all = strokes.current;
+    if (!all.length) { setTool('select'); return; }
+    const xs = all.flatMap((s) => s.pts.map((p) => p[0]));
+    const ys = all.flatMap((s) => s.pts.map((p) => p[1]));
+    const pad = Math.max(...all.map((s) => s.w)) + 4;
+    const minX = Math.min(...xs) - pad, minY = Math.min(...ys) - pad;
+    const maxX = Math.max(...xs) + pad, maxY = Math.max(...ys) + pad;
+    const w = Math.max(20, maxX - minX), h = Math.max(20, maxY - minY);
+    const it = await api.post<BoardItem>(`/boards/${id}/items`, {
+      type: 'draw',
+      x: minX, y: minY, w, h, z: maxZ() + 1, rotation: 0, color: 'paper',
+      data: { strokes: all, viewBox: [minX, minY, w, h] },
+    });
+    strokes.current = [];
+    setItems((x) => [...x, it]);
+    haptic.success();
+    setTool('select');
+    toast('Drawing added');
   }
 
   async function shareBoard() {
@@ -354,14 +434,16 @@ export default function Board() {
           className={
             'board-canvas ' +
             (board.canvasMode === 'fixed' ? 'bg-plain' : 'bg-' + board.background) +
-            (drag?.kind === 'pan' ? ' panning' : '')
+            (drag?.kind === 'pan' ? ' panning' : '') +
+            (tool === 'draw' ? ' drawing' : '')
           }
           style={{ backgroundPosition: `${view.x}px ${view.y}px`, backgroundSize: `${26 * view.k}px ${26 * view.k}px` }}
+          ref={canvasEl}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
-          onWheel={onWheel}
+          onLostPointerCapture={() => onPointerUp()}
           onDoubleClick={(e) => {
             if (e.target !== e.currentTarget) return;
             const p = toBoardCoords(e.clientX, e.clientY);
@@ -384,6 +466,21 @@ export default function Board() {
                   {board.canvasW} × {board.canvasH}
                 </div>
               </div>
+            )}
+            {(strokes.current.length > 0 || liveStroke) && (
+              <svg
+                style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 5000 }}
+                width="1" height="1"
+              >
+                {strokes.current.map((st, i) => (
+                  <polyline key={i} points={st.pts.map((p) => p.join(',')).join(' ')}
+                    fill="none" stroke={st.c} strokeWidth={st.w} strokeLinecap="round" strokeLinejoin="round" />
+                ))}
+                {liveStroke && (
+                  <polyline points={liveStroke.map((p) => p.join(',')).join(' ')}
+                    fill="none" stroke={penColor} strokeWidth={penWidth} strokeLinecap="round" strokeLinejoin="round" />
+                )}
+              </svg>
             )}
             {items.map((it) => (
               <Item
@@ -424,9 +521,27 @@ export default function Board() {
           </button>
           <button
             title="Text label"
-            onClick={() => addItem({ type: 'text', w: 260, h: 70, rotation: 0, data: { text: 'Heading' } })}
+            onClick={() => { haptic.tap(); addItem({ type: 'text', w: 260, h: 70, rotation: 0, data: { text: 'Heading' } }); }}
           >
             <Type size={20} />
+          </button>
+          <button
+            className={showShapes ? 'on' : ''}
+            title="Shapes"
+            onClick={() => { haptic.tap(); setShowShapes((v) => !v); setShowColors(false); }}
+          >
+            <Shapes size={20} />
+          </button>
+          <button
+            className={tool === 'draw' ? 'on' : ''}
+            title="Draw (D)"
+            onClick={() => {
+              haptic.tap();
+              if (tool === 'draw') commitDrawing();
+              else { setTool('draw'); setSel(null); }
+            }}
+          >
+            <Pencil size={20} />
           </button>
           {selected && (
             <>
@@ -439,6 +554,75 @@ export default function Board() {
             </>
           )}
         </div>
+
+        {showShapes && (
+          <div className="board-toolbar" style={{ bottom: 86 }}>
+            {[
+              ['rect', 'Rectangle'], ['ellipse', 'Ellipse'], ['triangle', 'Triangle'],
+              ['diamond', 'Diamond'], ['star', 'Star'], ['arrow', 'Arrow'], ['line', 'Line'],
+            ].map(([kind, label]) => (
+              <button
+                key={kind}
+                title={label}
+                onClick={() => {
+                  haptic.tap();
+                  addItem({
+                    type: 'shape',
+                    w: kind === 'line' || kind === 'arrow' ? 220 : 170,
+                    h: kind === 'line' || kind === 'arrow' ? 80 : 170,
+                    rotation: 0,
+                    data: { shape: kind },
+                  });
+                  setShowShapes(false);
+                }}
+              >
+                <ShapeGlyph kind={kind} />
+              </button>
+            ))}
+          </div>
+        )}
+
+        {tool === 'draw' && (
+          <div className="board-toolbar draw-bar" style={{ bottom: 86 }}>
+            {['#e5326b', '#f2681f', '#f5b800', '#0aa87e', '#1e8fd5', '#6d5efc', '#191621'].map((c) => (
+              <button
+                key={c}
+                title="Pen colour"
+                onClick={() => { haptic.tap(); setPenColor(c); }}
+                style={{ width: 34 }}
+              >
+                <span
+                  style={{
+                    width: 20, height: 20, borderRadius: '50%', background: c, display: 'block',
+                    outline: penColor === c ? '2.5px solid var(--accent)' : '1.5px solid var(--border)',
+                    outlineOffset: 2,
+                  }}
+                />
+              </button>
+            ))}
+            <div className="tb-div" />
+            {[2, 4, 8, 14].map((w) => (
+              <button key={w} title={`${w}px`} onClick={() => { haptic.tap(); setPenWidth(w); }} style={{ width: 34 }}>
+                <span
+                  style={{
+                    width: Math.min(18, w + 4), height: Math.min(18, w + 4), borderRadius: '50%',
+                    background: penWidth === w ? 'var(--accent)' : 'var(--text-dim)', display: 'block',
+                  }}
+                />
+              </button>
+            ))}
+            <div className="tb-div" />
+            <button
+              title="Undo last stroke"
+              onClick={() => { strokes.current = strokes.current.slice(0, -1); setLiveStroke(null); haptic.tap(); }}
+            >
+              <Eraser size={19} />
+            </button>
+            <button title="Finish drawing" className="on" onClick={commitDrawing}>
+              <Check size={20} />
+            </button>
+          </div>
+        )}
 
         {showColors && selected && (
           <div className="board-toolbar" style={{ bottom: 86 }}>
@@ -498,26 +682,70 @@ function Item({
 
   if (it.type === 'link') {
     const host = hostOf(it.data.url);
+    const d = it.data;
+    // Layout adapts to the card's current size, so resizing feels dynamic.
+    const compact = it.h < 132 || it.w < 170;   // no banner, one line
+    const wide = it.w >= 330 && it.h < 190;     // side-by-side thumb + text
+    const thumbH = wide ? undefined : Math.max(52, Math.min(it.h * 0.52, it.h - 74));
+    const titleLines = compact ? 1 : it.h > 260 ? 4 : 2;
+    const showDesc = !compact && !wide && it.h > 230 && d.description;
+
     return (
-      <div className={cls('board-item link-card')} style={base} onPointerDown={(e) => onMoveStart(e, it)}>
-        <div
-          className="lc-thumb"
-          style={it.data.image ? { backgroundImage: `url(${it.data.image})` } : undefined}
-        />
+      <div
+        className={cls('board-item link-card') + (wide ? ' lc-wide' : '')}
+        style={base}
+        onPointerDown={(e) => onMoveStart(e, it)}
+      >
+        {!compact && (
+          <div
+            className="lc-thumb"
+            style={{
+              height: wide ? '100%' : thumbH,
+              width: wide ? Math.min(it.w * 0.42, 190) : undefined,
+              backgroundImage: d.image ? `url(${d.image})` : undefined,
+              backgroundSize: d.isProduct ? 'contain' : 'cover',
+              backgroundRepeat: 'no-repeat',
+              backgroundColor: d.isProduct ? '#fff' : undefined,
+            }}
+          >
+            {d.discountPercent ? <span className="lc-off">-{d.discountPercent}%</span> : null}
+          </div>
+        )}
+
         <div className="lc-body">
-          <div className="lc-title">{it.data.title || host}</div>
+          <div
+            className="lc-title"
+            style={{ WebkitLineClamp: titleLines, fontSize: it.w < 200 ? 13 : 14.5 }}
+          >
+            {d.title || host}
+          </div>
+
+          {showDesc && <div className="lc-desc">{d.description}</div>}
+
+          {d.isProduct && d.priceFormatted && (
+            <div className="lc-price-row">
+              <span className="lc-price">{d.priceFormatted}</span>
+              {d.listPriceFormatted && <s className="lc-was">{d.listPriceFormatted}</s>}
+              {d.availability && /out/i.test(d.availability) && (
+                <span className="lc-stock out">Out of stock</span>
+              )}
+            </div>
+          )}
+
           <div className="lc-host">
-            {it.data.favicon && <img src={it.data.favicon} alt="" onError={(e) => ((e.target as HTMLElement).style.display = 'none')} />}
-            {host}
+            {d.favicon && (
+              <img src={d.favicon} alt="" onError={(e) => ((e.target as HTMLElement).style.display = 'none')} />
+            )}
+            {d.siteName || host}
           </div>
         </div>
+
         <button
-          className="btn primary sm"
-          style={{ position: 'absolute', right: 8, bottom: 8, padding: '5px 11px', fontSize: 12 }}
+          className="btn primary sm lc-open"
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => window.open(it.data.url, '_blank', 'noopener')}
+          onClick={() => window.open(d.url, '_blank', 'noopener')}
         >
-          Open
+          {d.isProduct ? 'Buy' : 'Open'}
         </button>
         <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
       </div>
@@ -577,6 +805,66 @@ function Item({
     );
   }
 
+  if (it.type === 'shape') {
+    const kind = it.data.shape || 'rect';
+    const fill = STICKY_COLORS[it.color] || STICKY_COLORS.yellow;
+    const stroke = it.data.stroke ?? true;
+    const common = { fill: it.data.filled === false ? 'none' : fill, stroke: stroke ? 'rgba(0,0,0,.42)' : 'none', strokeWidth: 2.5 };
+    return (
+      <div
+        className={cls('board-item shape-item')}
+        style={{ ...base, background: 'transparent', border: 'none', boxShadow: 'none', overflow: 'visible' }}
+        onPointerDown={(e) => onMoveStart(e, it)}
+      >
+        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
+          {kind === 'rect' && <rect x="2" y="2" width="96" height="96" rx="7" {...common} />}
+          {kind === 'ellipse' && <ellipse cx="50" cy="50" rx="48" ry="48" {...common} />}
+          {kind === 'triangle' && <polygon points="50,3 97,97 3,97" {...common} />}
+          {kind === 'diamond' && <polygon points="50,2 98,50 50,98 2,50" {...common} />}
+          {kind === 'star' && (
+            <polygon points="50,3 61,38 98,38 68,60 79,95 50,73 21,95 32,60 2,38 39,38" {...common} />
+          )}
+          {kind === 'arrow' && (
+            <g>
+              <line x1="4" y1="50" x2="88" y2="50" stroke={fill} strokeWidth="9" strokeLinecap="round" />
+              <polygon points="76,28 99,50 76,72" fill={fill} />
+            </g>
+          )}
+          {kind === 'line' && <line x1="3" y1="50" x2="97" y2="50" stroke={fill} strokeWidth="8" strokeLinecap="round" />}
+        </svg>
+        {it.data.label ? <div className="shape-label">{it.data.label}</div> : null}
+        <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
+      </div>
+    );
+  }
+
+  if (it.type === 'draw') {
+    const strokes: { pts: number[][]; c: string; w: number }[] = it.data.strokes || [];
+    const vb = it.data.viewBox || [0, 0, it.w, it.h];
+    return (
+      <div
+        className={cls('board-item draw-item')}
+        style={{ ...base, background: 'transparent', border: 'none', boxShadow: 'none' }}
+        onPointerDown={(e) => onMoveStart(e, it)}
+      >
+        <svg width="100%" height="100%" viewBox={vb.join(' ')} preserveAspectRatio="none" style={{ display: 'block', pointerEvents: 'none' }}>
+          {strokes.map((st, i) => (
+            <polyline
+              key={i}
+              points={st.pts.map((p) => p.join(',')).join(' ')}
+              fill="none"
+              stroke={st.c}
+              strokeWidth={st.w}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          ))}
+        </svg>
+        <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
+      </div>
+    );
+  }
+
   // text label
   return (
     <div
@@ -592,6 +880,26 @@ function Item({
       />
       <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
     </div>
+  );
+}
+
+function ShapeGlyph({ kind }: { kind: string }) {
+  const c = { fill: 'none', stroke: 'currentColor', strokeWidth: 6, strokeLinejoin: 'round' as const };
+  return (
+    <svg width="20" height="20" viewBox="0 0 100 100">
+      {kind === 'rect' && <rect x="8" y="8" width="84" height="84" rx="10" {...c} />}
+      {kind === 'ellipse' && <ellipse cx="50" cy="50" rx="43" ry="43" {...c} />}
+      {kind === 'triangle' && <polygon points="50,8 92,92 8,92" {...c} />}
+      {kind === 'diamond' && <polygon points="50,6 94,50 50,94 6,50" {...c} />}
+      {kind === 'star' && <polygon points="50,6 62,38 95,38 68,60 79,93 50,72 21,93 32,60 5,38 38,38" {...c} />}
+      {kind === 'arrow' && (
+        <g>
+          <line x1="10" y1="50" x2="78" y2="50" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />
+          <polygon points="70,30 95,50 70,70" fill="currentColor" />
+        </g>
+      )}
+      {kind === 'line' && <line x1="10" y1="50" x2="90" y2="50" stroke="currentColor" strokeWidth="8" strokeLinecap="round" />}
+    </svg>
   );
 }
 

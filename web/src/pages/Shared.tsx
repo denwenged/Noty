@@ -86,11 +86,54 @@ export default function Shared() {
               };
               if (it.type === 'image')
                 return <img key={it.id} src={it.data.url} style={{ ...base, objectFit: 'cover', borderRadius: 14 }} />;
+              if (it.type === 'draw') {
+                const vb = it.data.viewBox || [0, 0, it.w, it.h];
+                return (
+                  <svg key={it.id} style={{ ...base }} viewBox={vb.join(' ')} preserveAspectRatio="none">
+                    {(it.data.strokes || []).map((st: any, i: number) => (
+                      <polyline key={i} points={st.pts.map((p: number[]) => p.join(',')).join(' ')}
+                        fill="none" stroke={st.c} strokeWidth={st.w} strokeLinecap="round" strokeLinejoin="round" />
+                    ))}
+                  </svg>
+                );
+              }
+              if (it.type === 'shape') {
+                const fill = STICKY_COLORS[it.color] || STICKY_COLORS.yellow;
+                const k = it.data.shape || 'rect';
+                const cm = { fill: it.data.filled === false ? 'none' : fill, stroke: 'rgba(0,0,0,.42)', strokeWidth: 2.5 };
+                return (
+                  <svg key={it.id} style={{ ...base }} viewBox="0 0 100 100" preserveAspectRatio="none">
+                    {k === 'rect' && <rect x="2" y="2" width="96" height="96" rx="7" {...cm} />}
+                    {k === 'ellipse' && <ellipse cx="50" cy="50" rx="48" ry="48" {...cm} />}
+                    {k === 'triangle' && <polygon points="50,3 97,97 3,97" {...cm} />}
+                    {k === 'diamond' && <polygon points="50,2 98,50 50,98 2,50" {...cm} />}
+                    {k === 'star' && <polygon points="50,3 61,38 98,38 68,60 79,95 50,73 21,95 32,60 2,38 39,38" {...cm} />}
+                    {k === 'arrow' && (<g><line x1="4" y1="50" x2="88" y2="50" stroke={fill} strokeWidth="9" strokeLinecap="round" /><polygon points="76,28 99,50 76,72" fill={fill} /></g>)}
+                    {k === 'line' && <line x1="3" y1="50" x2="97" y2="50" stroke={fill} strokeWidth="8" strokeLinecap="round" />}
+                  </svg>
+                );
+              }
               if (it.type === 'link')
                 return (
                   <a key={it.id} className="board-item link-card" style={{ ...base, cursor: 'pointer' }} href={it.data.url} target="_blank" rel="noopener">
-                    <div className="lc-thumb" style={it.data.image ? { backgroundImage: `url(${it.data.image})` } : undefined} />
-                    <div className="lc-body"><div className="lc-title">{it.data.title}</div></div>
+                    <div className="lc-thumb" style={{
+                      height: '52%',
+                      backgroundImage: it.data.image ? `url(${it.data.image})` : undefined,
+                      backgroundSize: it.data.isProduct ? 'contain' : 'cover',
+                      backgroundRepeat: 'no-repeat',
+                      backgroundColor: it.data.isProduct ? '#fff' : undefined,
+                    }}>
+                      {it.data.discountPercent ? <span className="lc-off">-{it.data.discountPercent}%</span> : null}
+                    </div>
+                    <div className="lc-body">
+                      <div className="lc-title">{it.data.title}</div>
+                      {it.data.isProduct && it.data.priceFormatted && (
+                        <div className="lc-price-row">
+                          <span className="lc-price">{it.data.priceFormatted}</span>
+                          {it.data.listPriceFormatted && <s className="lc-was">{it.data.listPriceFormatted}</s>}
+                        </div>
+                      )}
+                    </div>
                   </a>
                 );
               if (it.type === 'text')

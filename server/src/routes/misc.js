@@ -3,51 +3,35 @@ import { nanoid } from 'nanoid';
 import { db, getSetting, setSetting } from '../db.js';
 import { requireAuth, requireAdmin, hash, publicUser } from '../auth.js';
 import { shapeItem } from './boards.js';
+import { unfurl } from '../lib/unfurl.js';
 
 const r = Router();
 
-/* -------- link preview: fetch <title> for URL cards -------- */
+/* -------- link preview: OG metadata + product price/image -------- */
 r.post('/unfurl', requireAuth, async (req, res) => {
   let { url } = req.body || {};
   if (!url) return res.status(400).json({ error: 'URL required' });
   if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-  let host;
+  let parsed;
   try {
-    host = new URL(url).hostname;
+    parsed = new URL(url);
   } catch {
     return res.status(400).json({ error: 'Invalid URL' });
   }
-  const fallback = {
-    url,
-    title: host,
-    description: '',
-    favicon: `https://icons.duckduckgo.com/ip3/${host}.ico`,
-  };
+  if (!/^https?:$/.test(parsed.protocol))
+    return res.status(400).json({ error: 'Unsupported protocol' });
+
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
-    const resp = await fetch(url, {
-      signal: ctrl.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 NotyBot' },
-    });
-    clearTimeout(t);
-    const html = (await resp.text()).slice(0, 200000);
-    const pick = (re) => (html.match(re) || [])[1]?.trim();
-    const title =
-      pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)/i) ||
-      pick(/<title[^>]*>([^<]+)</i);
-    const description =
-      pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']+)/i) ||
-      pick(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i);
-    const image = pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i);
-    res.json({
-      ...fallback,
-      title: title || fallback.title,
-      description: description || '',
-      image: image || null,
-    });
+    res.json(await unfurl(url));
   } catch {
-    res.json(fallback);
+    res.json({
+      url,
+      title: parsed.hostname.replace(/^www\./, ''),
+      description: '',
+      favicon: `https://icons.duckduckgo.com/ip3/${parsed.hostname}.ico`,
+      image: null,
+      isProduct: false,
+    });
   }
 });
 

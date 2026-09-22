@@ -5,6 +5,20 @@ in your notes, and proper multi-user accounts. Installs to your phone's home scr
 
 ---
 
+### Desktop canvas, drawing & product links
+
+- **Mouse-pan anywhere** — drag empty canvas to pan, on infinite *and* fixed-size boards.
+- **Scroll to zoom** — the wheel zooms toward the cursor (0.1x–4x); `Shift`+wheel pans sideways.
+- **Drags release cleanly** — items follow the pointer only while the button is held.
+- **Freehand drawing** — press `D` or the pencil, sketch with 7 colours and 4 nib sizes, then
+  `Check` to commit the sketch as a single movable, resizable board item.
+- **Shapes** — rectangle, ellipse, triangle, diamond, star, arrow and line, tinted with the
+  sticky palette and resizable to any proportion.
+- **Link cards resize dynamically** — the layout reflows as you drag the handle: compact pill
+  when small, side-by-side thumbnail when wide, full banner plus description when tall.
+- **Product links** — paste an Amazon/eBay/shop URL and Noty pulls the product image, price,
+  original price and a `-30%` discount tag straight onto the card.
+
 ## Features
 
 **Notes — the home for text, images and links**
