@@ -1,0 +1,23 @@
+services:
+  noty:
+    build: .
+    image: noty:latest
+    container_name: noty
+    restart: unless-stopped
+    ports:
+      - "${NOTY_PORT:-8080}:4000"
+    environment:
+      # CHANGE THIS before exposing Noty to a network.
+      JWT_SECRET: ${JWT_SECRET:-please-change-me}
+      DATA_DIR: /data
+      NODE_ENV: production
+    volumes:
+      - noty-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  noty-data:
