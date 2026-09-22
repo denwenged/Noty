@@ -108,6 +108,15 @@ CREATE TABLE IF NOT EXISTS files (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS board_collaborators (
+  board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
+  role     TEXT NOT NULL DEFAULT 'editor',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (board_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_collab_user ON board_collaborators(user_id);
+
 CREATE TABLE IF NOT EXISTS shares (
   slug TEXT PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

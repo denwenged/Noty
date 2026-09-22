@@ -299,7 +299,14 @@ export async function unfurl(url) {
     currency: null,
     availability: null,
     siteName: null,
+    brandColor: null,
+    blocked: false,
   };
+  base.brandColor = hostColor(host);
+  // Even if the fetch fails we can still name the card from its URL.
+  const urlTitle = titleFromUrl(url);
+  if (urlTitle) base.title = urlTitle;
+  if (looksLikeProductUrl(url)) base.isProduct = true;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 9000);
@@ -318,7 +325,7 @@ export async function unfurl(url) {
     });
     html = (await resp.text()).slice(0, 700000);
   } catch {
-    return base;
+    return { ...base, blocked: true };
   } finally {
     clearTimeout(timer);
   }
@@ -343,6 +350,7 @@ export async function unfurl(url) {
     pick(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)/i);
   const siteName = pick(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)/i);
 
+  const blocked = isBlockedPage(html, ogTitle);
   const product = extractProduct(html, host);
   if (product.image) image = product.image;
 
@@ -355,13 +363,20 @@ export async function unfurl(url) {
     }
   }
 
+  // Prefer a real product name; fall back to the URL slug when the retailer
+  // served a bot wall or a title that is just the shop's name.
+  const cleaned = cleanTitle(product.title || ogTitle, host);
+  const title = (blocked ? urlTitle || cleaned : cleaned || urlTitle) || base.title;
+
   return {
     ...base,
-    title: product.title || ogTitle || base.title,
-    description,
+    title,
+    description: blocked ? '' : description,
     image,
     siteName,
-    isProduct: product.isProduct,
+    blocked,
+    brandColor: brandColor(html, host),
+    isProduct: product.isProduct || (looksLikeProductUrl(url) && (product.price != null || blocked || isShopHost(host))),
     price: product.price,
     currency: product.currency,
     priceFormatted: product.priceFormatted,
@@ -369,4 +384,116 @@ export async function unfurl(url) {
     discountPercent: product.discountPercent,
     availability: product.availability,
   };
+}
+
+/* ============================================================
+   Retailer awareness, bot-block detection and brand colours
+   ============================================================ */
+
+/** Hostnames that are product pages even when the HTML is a bot wall. */
+const SHOPS = [
+  'amazon.', 'ebay.', 'etsy.', 'aliexpress.', 'walmart.', 'target.', 'bestbuy.',
+  'newegg.', 'wayfair.', 'ikea.', 'argos.', 'zalando.', 'asos.', 'shein.',
+  'temu.', 'mediamarkt.', 'fnac.', 'elcorteingles.', 'pccomponentes.',
+  'bol.com', 'otto.de', 'cdiscount.', 'allegro.', 'flipkart.', 'rakuten.',
+  'shopify.', 'backmarket.', 'decathlon.', 'leroymerlin.',
+];
+
+export const isShopHost = (host) => SHOPS.some((s) => host.includes(s));
+
+/** Product-page URL patterns (Amazon /dp/, eBay /itm/, Shopify /products/…). */
+const PRODUCT_PATH = /\/(?:dp|gp\/product|itm|product|products|listing|p|pd|ip)\/|[?&](?:sku|productId|item)=/i;
+
+export const looksLikeProductUrl = (url) => {
+  try {
+    const u = new URL(url);
+    return PRODUCT_PATH.test(u.pathname + u.search) || isShopHost(u.hostname);
+  } catch { return false; }
+};
+
+/**
+ * Retailers frequently answer datacentre IPs with a captcha / "Robot Check" /
+ * "Access Denied" page. Detect that so we can fall back to the URL instead of
+ * saving a card that just says "Amazon".
+ */
+export function isBlockedPage(html, title) {
+  const t = (title || '').toLowerCase();
+  if (/robot check|are you a human|access denied|captcha|bot detection|verify you are|enable javascript|page not found|just a moment/i.test(t))
+    return true;
+  if (html.length < 2500 && /captcha|automated access|unusual traffic/i.test(html)) return true;
+  return /id=["']captchacharacters|amazon\.com\/errors\/validatecaptcha|cf-browser-verification/i.test(html);
+}
+
+/**
+ * Derive a readable product name from the URL when the page gives us nothing.
+ * "…/Sony-WH-1000XM5-Cancelling-Headphones/dp/B09XS7JWHH" -> "Sony WH-1000XM5 Cancelling Headphones"
+ */
+export function titleFromUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const segs = u.pathname.split('/').filter(Boolean);
+  const junk = /^(dp|gp|product|products|itm|listing|p|pd|ip|ref|category|c|b|s|shop|store|item|en|us|uk|es|de|fr)$/i;
+  // Longest hyphenated, non-ID segment is almost always the slug.
+  const cand = segs
+    .filter((s) => !junk.test(s) && !/^[A-Z0-9]{8,14}$/.test(s) && !/^\d+$/.test(s))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!cand) return null;
+  const words = decodeURIComponent(cand)
+    .replace(/\.(html?|php|aspx?)$/i, '')
+    .replace(/[-_+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (words.length < 3 || words.length > 120) return null;
+  // Title-case only all-lowercase slugs; keep existing capitals (model numbers).
+  const t = words === words.toLowerCase()
+    ? words.replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    : words;
+  return t;
+}
+
+/** Strip retailer boilerplate: "Amazon.com: Real Name : Electronics" -> "Real Name" */
+export function cleanTitle(title, host) {
+  if (!title) return null;
+  let t = decodeEntities(title).replace(/\s+/g, ' ').trim();
+  t = t.replace(/^(amazon(\.[a-z.]+)?|ebay|etsy|walmart|target|best ?buy|aliexpress)\s*[:|–-]\s*/i, '');
+  t = t.replace(/\s*[:|–-]\s*(amazon(\.[a-z.]+)?|ebay|etsy|walmart|target|best ?buy)(\.[a-z]+)?\s*$/i, '');
+  // Amazon appends " : Category : Subcategory"
+  const parts = t.split(/\s+:\s+/);
+  if (parts.length > 1 && parts[0].length > 12) t = parts[0];
+  t = t.replace(/\s*\|\s*[^|]{0,40}$/, (m) => (t.length - m.length > 20 ? '' : m));
+  t = t.trim();
+  const bare = host.replace(/^www\./, '');
+  if (!t || t.toLowerCase() === bare) return null;
+  return t.slice(0, 200);
+}
+
+/** Brand colour for gradient fallbacks: theme-color, msapplication tile, or a hashed hue. */
+export function brandColor(html, host) {
+  const m =
+    html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']theme-color["']/i) ||
+    html.match(/<meta[^>]+name=["']msapplication-TileColor["'][^>]+content=["']([^"']+)/i);
+  const raw = m?.[1]?.trim();
+  if (raw && /^#?[0-9a-f]{3,8}$/i.test(raw)) return raw.startsWith('#') ? raw : '#' + raw;
+  if (raw && /^rgb/i.test(raw)) {
+    const n = raw.match(/\d+/g);
+    if (n?.length >= 3) return '#' + n.slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
+  }
+  return hostColor(host);
+}
+
+/** Deterministic, pleasant colour derived from the hostname. */
+export function hostColor(host) {
+  const known = {
+    'amazon': '#ff9900', 'ebay': '#e53238', 'etsy': '#f1641e', 'youtube': '#ff0000',
+    'github': '#24292f', 'twitter': '#1d9bf0', 'x.com': '#000000', 'reddit': '#ff4500',
+    'wikipedia': '#36c', 'figma': '#a259ff', 'notion': '#000000', 'spotify': '#1db954',
+    'linkedin': '#0a66c2', 'instagram': '#e1306c', 'stackoverflow': '#f48024',
+    'walmart': '#0071dc', 'target': '#cc0000', 'ikea': '#0058a3', 'aliexpress': '#ff4747',
+  };
+  const bare = host.replace(/^www\./, '');
+  for (const [k, v] of Object.entries(known)) if (bare.includes(k)) return v;
+  let h = 0;
+  for (let i = 0; i < bare.length; i++) h = (h * 31 + bare.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 68% 52%)`;
 }

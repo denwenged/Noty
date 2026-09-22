@@ -19,13 +19,29 @@ export const shapeItem = (i) => ({
   data: JSON.parse(i.data || '{}'),
 });
 
+/** Board the user owns. */
 const own = (req, id) =>
   db.prepare('SELECT * FROM boards WHERE id=? AND user_id=?').get(id, req.user.id);
 
+/** Board the user owns OR has been invited to edit. */
+export const accessible = (req, id) =>
+  db
+    .prepare(
+      `SELECT b.* FROM boards b
+       LEFT JOIN board_collaborators c ON c.board_id = b.id AND c.user_id = ?
+       WHERE b.id = ? AND (b.user_id = ? OR c.user_id IS NOT NULL)`
+    )
+    .get(req.user.id, id, req.user.id);
+
 r.get('/', (req, res) => {
   const boards = db
-    .prepare('SELECT * FROM boards WHERE user_id=? ORDER BY updated_at DESC')
-    .all(req.user.id);
+    .prepare(
+      `SELECT DISTINCT b.*, (b.user_id != ?) AS shared FROM boards b
+       LEFT JOIN board_collaborators c ON c.board_id = b.id AND c.user_id = ?
+       WHERE b.user_id = ? OR c.user_id IS NOT NULL
+       ORDER BY b.updated_at DESC`
+    )
+    .all(req.user.id, req.user.id, req.user.id);
   res.json(
     boards.map((b) => ({
       id: b.id,
@@ -36,6 +52,7 @@ r.get('/', (req, res) => {
       canvasH: b.canvas_h,
       createdAt: b.created_at,
       updatedAt: b.updated_at,
+      shared: !!b.shared,
       itemCount: db.prepare('SELECT COUNT(*) c FROM board_items WHERE board_id=?').get(b.id).c,
     }))
   );
@@ -62,7 +79,7 @@ r.post('/', (req, res) => {
 });
 
 r.get('/:id', (req, res) => {
-  const b = own(req, req.params.id);
+  const b = accessible(req, req.params.id);
   if (!b) return res.status(404).json({ error: 'Not found' });
   const items = db.prepare('SELECT * FROM board_items WHERE board_id=?').all(b.id);
   res.json({
@@ -77,7 +94,7 @@ r.get('/:id', (req, res) => {
 });
 
 r.patch('/:id', (req, res) => {
-  const b = own(req, req.params.id);
+  const b = accessible(req, req.params.id);
   if (!b) return res.status(404).json({ error: 'Not found' });
   db.prepare(
     "UPDATE boards SET name=?,background=?,canvas_mode=?,canvas_w=?,canvas_h=?,updated_at=datetime('now') WHERE id=?"
@@ -98,7 +115,7 @@ r.delete('/:id', (req, res) => {
 });
 
 r.post('/:id/items', (req, res) => {
-  const b = own(req, req.params.id);
+  const b = accessible(req, req.params.id);
   if (!b) return res.status(404).json({ error: 'Not found' });
   const i = req.body || {};
   const info = db
@@ -123,7 +140,7 @@ r.post('/:id/items', (req, res) => {
 });
 
 r.patch('/:id/items/:itemId', (req, res) => {
-  const b = own(req, req.params.id);
+  const b = accessible(req, req.params.id);
   if (!b) return res.status(404).json({ error: 'Not found' });
   const it = db
     .prepare('SELECT * FROM board_items WHERE id=? AND board_id=?')
@@ -148,9 +165,51 @@ r.patch('/:id/items/:itemId', (req, res) => {
 });
 
 r.delete('/:id/items/:itemId', (req, res) => {
-  const b = own(req, req.params.id);
+  const b = accessible(req, req.params.id);
   if (!b) return res.status(404).json({ error: 'Not found' });
   db.prepare('DELETE FROM board_items WHERE id=? AND board_id=?').run(req.params.itemId, b.id);
+  res.json({ ok: true });
+});
+
+/* ------------------- collaborators (live editing) ------------------- */
+
+const ownerOnly = (req, res) => {
+  const b = own(req, req.params.id);
+  if (!b) { res.status(403).json({ error: 'Only the board owner can manage collaborators' }); return null; }
+  return b;
+};
+
+r.get('/:id/collaborators', (req, res) => {
+  const b = accessible(req, req.params.id);
+  if (!b) return res.status(404).json({ error: 'Not found' });
+  const owner = db.prepare('SELECT id,username,avatar FROM users WHERE id=?').get(b.user_id);
+  const people = db
+    .prepare(
+      `SELECT u.id, u.username, u.avatar, c.role FROM board_collaborators c
+       JOIN users u ON u.id = c.user_id WHERE c.board_id = ? ORDER BY u.username`
+    )
+    .all(b.id);
+  res.json({ owner: { ...owner, role: 'owner' }, collaborators: people, isOwner: b.user_id === req.user.id });
+});
+
+r.post('/:id/collaborators', (req, res) => {
+  const b = ownerOnly(req, res);
+  if (!b) return;
+  const name = String(req.body?.username || '').trim();
+  if (!name) return res.status(400).json({ error: 'Username required' });
+  const u = db.prepare('SELECT id,username,avatar FROM users WHERE username=? COLLATE NOCASE').get(name);
+  if (!u) return res.status(404).json({ error: `No user called "${name}"` });
+  if (u.id === b.user_id) return res.status(400).json({ error: 'You already own this board' });
+  db.prepare(
+    'INSERT OR IGNORE INTO board_collaborators (board_id,user_id,role) VALUES (?,?,?)'
+  ).run(b.id, u.id, req.body?.role === 'viewer' ? 'viewer' : 'editor');
+  res.json({ ...u, role: req.body?.role === 'viewer' ? 'viewer' : 'editor' });
+});
+
+r.delete('/:id/collaborators/:userId', (req, res) => {
+  const b = ownerOnly(req, res);
+  if (!b) return;
+  db.prepare('DELETE FROM board_collaborators WHERE board_id=? AND user_id=?').run(b.id, req.params.userId);
   res.json({ ok: true });
 });
 

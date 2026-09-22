@@ -2,7 +2,9 @@ import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createServer } from 'node:http';
 import { attachUser } from './auth.js';
+import { attachCollab } from './lib/collab.js';
 import { DATA_DIR, DB_PATH } from './db.js';
 import authRoutes from './routes/auth.js';
 import noteRoutes from './routes/notes.js';
@@ -43,4 +45,6 @@ app.use((err, _req, res, _next) => {
 });
 
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Noty API listening on :${PORT}`));
+const server = createServer(app);
+attachCollab(server);   // live board collaboration at ws://…/api/collab
+server.listen(PORT, '0.0.0.0', () => console.log(`Noty API listening on :${PORT} (collab enabled)`));

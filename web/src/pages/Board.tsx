@@ -3,13 +3,15 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, StickyNote, Link2, ImagePlus, Trash2, Copy, Share2, ZoomIn, ZoomOut,
   Maximize, Palette, Grid3x3, Type, CheckSquare, Square, Plus, X, Frame,
-  Shapes, Pencil, Check, Eraser,
+  Shapes, Pencil, Check, Eraser, Undo2, BringToFront, SendToBack,
+  ChevronUp, ChevronDown, Image as ImageIcon, UserPlus,
 } from 'lucide-react';
 import { api, uploadImage, CANVAS_PRESETS, type Board as BoardT, type BoardItem } from '../api';
 import { useApp } from '../store';
 import { STICKY_COLORS, hostOf } from '../colors';
 import { haptic } from '../lib/haptics';
 import Sheet from '../lib/Sheet';
+import { useCollab, type Peer } from '../lib/collab';
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number; ox: number; oy: number }
@@ -35,6 +37,28 @@ export default function Board() {
   const [showShapes, setShowShapes] = useState(false);
   const [liveStroke, setLiveStroke] = useState<number[][] | null>(null);
   const strokes = useRef<{ pts: number[][]; c: string; w: number }[]>([]);
+  const [erasing, setErasing] = useState(false);
+  const [linkDlg, setLinkDlg] = useState(false);
+  const [editLink, setEditLink] = useState<BoardItem | null>(null);
+  const replaceRef = useRef<HTMLInputElement>(null);
+  const [showPeople, setShowPeople] = useState(false);
+
+  /* ---- live collaboration: apply changes made by other editors ---- */
+  const applyRemote = useCallback((m: any) => {
+    if (m.t === 'item:add' && m.item) {
+      setItems((cur) => (cur.some((c) => c.id === m.item.id) ? cur : [...cur, m.item]));
+    } else if (m.t === 'item:update' && m.item) {
+      setItems((cur) => cur.map((c) => (c.id === m.item.id ? { ...c, ...m.item } : c)));
+    } else if (m.t === 'item:remove') {
+      setItems((cur) => cur.filter((c) => c.id !== m.id));
+    } else if (m.t === 'board:update' && m.patch) {
+      setBoard((b) => (b ? { ...b, ...m.patch } : b));
+    }
+  }, []);
+  const { peers, connected, send } = useCollab(board?.id, applyRemote);
+  const sendRef = useRef<typeof send | null>(null);
+  sendRef.current = send;
+  const [eraseTick, setEraseTick] = useState(0);
   const [dropped, setDropped] = useState<number | null>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const canvasEl = useRef<HTMLDivElement>(null);
@@ -88,6 +112,7 @@ export default function Board() {
       body.y = fit.y;
       const it = await api.post<BoardItem>(`/boards/${id}/items`, body);
       haptic.success();
+      sendRef.current?.({ t: 'item:add', item: it });
       setItems((x) => [...x, it]);
       setSel(it.id);
       setFresh(it.id);
@@ -106,6 +131,7 @@ export default function Board() {
 
   const update = (itemId: number, patch: Partial<BoardItem>, save = true) => {
     setItems((x) => x.map((i) => (i.id === itemId ? { ...i, ...patch } : i)));
+    sendRef.current?.({ t: 'item:update', item: { id: itemId, ...patch } });
     if (save) queueSave(itemId, patch);
   };
 
@@ -113,6 +139,7 @@ export default function Board() {
     haptic.warn();
     setItems((x) => x.filter((i) => i.id !== itemId));
     setSel(null);
+    sendRef.current?.({ t: 'item:remove', id: itemId });
     await api.del(`/boards/${id}/items/${itemId}`).catch(() => {});
   };
 
@@ -120,6 +147,7 @@ export default function Board() {
     const copy = await api.post<BoardItem>(`/boards/${id}/items`, {
       ...it, x: it.x + 24, y: it.y + 24, z: maxZ() + 1,
     });
+    sendRef.current?.({ t: 'item:add', item: copy });
     setItems((x) => [...x, copy]);
     setSel(copy.id);
   };
@@ -157,6 +185,14 @@ export default function Board() {
     }
     // Background = anything that isn't an item. On a fixed board the page
     // rectangle sits above the canvas, so target !== currentTarget there.
+    // Eraser: rub out strokes from the working sketch and delete drawn items.
+    if (tool === 'erase') {
+      const p = toBoardCoords(e.clientX, e.clientY);
+      eraseAt(p.x, p.y);
+      setErasing(true);
+      capture(e.pointerId);
+      return;
+    }
     // Drawing mode: capture strokes in board coordinates
     if (tool === 'draw') {
       const p = toBoardCoords(e.clientX, e.clientY);
@@ -178,7 +214,23 @@ export default function Board() {
     try { canvasEl.current?.setPointerCapture(pointerId); } catch { /* ignore */ }
   };
 
+  const lastCursor = useRef(0);
+  const broadcastCursor = (clientX: number, clientY: number) => {
+    const now = performance.now();
+    if (now - lastCursor.current < 45) return;    // ~22 fps is plenty for cursors
+    lastCursor.current = now;
+    const p = toBoardCoords(clientX, clientY);
+    sendRef.current?.({ t: 'cursor', x: Math.round(p.x), y: Math.round(p.y) });
+  };
+
   const onPointerMove = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse') broadcastCursor(e.clientX, e.clientY);
+    if (erasing) {
+      if (e.pointerType === 'mouse' && e.buttons === 0) { setErasing(false); return; }
+      const p = toBoardCoords(e.clientX, e.clientY);
+      eraseAt(p.x, p.y);
+      return;
+    }
     if (liveStroke) {
       if (e.pointerType === 'mouse' && e.buttons === 0) { finishStroke(); return; }
       const p = toBoardCoords(e.clientX, e.clientY);
@@ -226,6 +278,7 @@ export default function Board() {
   };
 
   const onPointerUp = (e?: React.PointerEvent) => {
+    if (erasing) { setErasing(false); if (e) pointers.current.delete(e.pointerId); return; }
     if (liveStroke) { finishStroke(); if (e) pointers.current.delete(e.pointerId); return; }
     if (e) pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
@@ -311,6 +364,15 @@ export default function Board() {
       if ((e.key === 'Delete' || e.key === 'Backspace') && sel) { e.preventDefault(); removeItem(sel); }
       if (e.key.toLowerCase() === 'n') addItem({ type: 'sticky', data: { text: '' } });
       if (e.key.toLowerCase() === 'f') fit();
+      if (sel && (e.key === ']' || e.key === '[')) {
+        e.preventDefault();
+        const dir = e.key === ']' ? 'up' : 'down';
+        moveLayer(sel, e.shiftKey ? (dir === 'up' ? 'front' : 'back') : dir);
+      }
+      if (e.key.toLowerCase() === 'e' && !e.metaKey && !e.ctrlKey) {
+        setTool((t) => (t === 'erase' ? 'select' : 'erase'));
+        setSel(null);
+      }
       if (e.key.toLowerCase() === 'd') {
         if (tool === 'draw') commitDrawing();
         else { setTool('draw'); setSel(null); }
@@ -325,14 +387,16 @@ export default function Board() {
     return () => window.removeEventListener('keydown', k);
   }, [sel, items, view, tool, penColor, penWidth]);
 
-  async function addLink() {
-    const url = prompt('Paste a URL to pin on the board');
-    if (!url) return;
-    const it = await addItem({ type: 'link', w: 250, h: 180, rotation: 0, data: { url, title: url } });
-    try {
-      const meta = await api.post<any>('/unfurl', { url });
-      update(it.id, { data: meta });
-    } catch { /* keep raw url */ }
+  /** Create a link card from metadata previewed in the dialog. */
+  async function addLink(meta: any) {
+    const it = await addItem({
+      type: 'link',
+      w: 280, h: meta?.isProduct ? 250 : 200,
+      rotation: 0,
+      data: meta,
+    });
+    haptic.success();
+    return it;
   }
 
   async function addImage(files: FileList | null) {
@@ -342,6 +406,46 @@ export default function Board() {
         const up = await uploadImage(f);
         await addItem({ type: 'image', w: 280, h: 220, rotation: 0, data: { url: up.url } });
       } catch (e: any) { toast(e.message, 'err'); }
+    }
+  }
+
+  /** Distance from point to a line segment — used for stroke hit-testing. */
+  function distToSeg(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
+    const dx = bx - ax, dy = by - ay;
+    const len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len)) : 0;
+    const cx = ax + t * dx, cy = ay + t * dy;
+    return Math.hypot(px - cx, py - cy);
+  }
+
+  const ERASER_R = 14;
+
+  /** Erase uncommitted strokes under the cursor, and saved drawings they belong to. */
+  function eraseAt(x: number, y: number) {
+    const r = ERASER_R / view.k + 4;
+    const hit = (st: { pts: number[][]; w: number }) => {
+      const tol = r + st.w / 2;
+      for (let i = 1; i < st.pts.length; i++) {
+        const [ax, ay] = st.pts[i - 1], [bx, by] = st.pts[i];
+        if (distToSeg(x, y, ax, ay, bx, by) <= tol) return true;
+      }
+      return st.pts.length === 1 && Math.hypot(x - st.pts[0][0], y - st.pts[0][1]) <= tol;
+    };
+
+    const before = strokes.current.length;
+    strokes.current = strokes.current.filter((st) => !hit(st));
+    if (strokes.current.length !== before) { setEraseTick((t) => t + 1); haptic.tap(); }
+
+    // Saved drawing items: drop the strokes we touched, delete the item if empty.
+    for (const it of items) {
+      if (it.type !== 'draw') continue;
+      if (x < it.x - r || y < it.y - r || x > it.x + it.w + r || y > it.y + it.h + r) continue;
+      const list: { pts: number[][]; c: string; w: number }[] = it.data.strokes || [];
+      const kept = list.filter((st) => !hit(st));
+      if (kept.length === list.length) continue;
+      haptic.tap();
+      if (!kept.length) { removeItem(it.id); continue; }
+      update(it.id, { data: { ...it.data, strokes: kept } });
     }
   }
 
@@ -365,6 +469,45 @@ export default function Board() {
     haptic.success();
     setTool('select');
     toast('Drawing added');
+  }
+
+  /* ----------------------- layer management ----------------------- */
+
+  /** Normalise z to 1..n in current visual order (keeps numbers small). */
+  function ordered() {
+    return [...items].sort((a, b) => a.z - b.z || a.id - b.id);
+  }
+
+  async function applyZ(next: BoardItem[]) {
+    const changed = next
+      .map((it, idx) => ({ it, z: idx + 1 }))
+      .filter(({ it, z }) => it.z !== z);
+    if (!changed.length) return;
+    setItems((cur) =>
+      cur.map((c) => {
+        const hit = changed.find(({ it }) => it.id === c.id);
+        return hit ? { ...c, z: hit.z } : c;
+      })
+    );
+    haptic.tap();
+    await Promise.all(changed.map(({ it, z }) => api.patch(`/boards/${id}/items/${it.id}`, { z })));
+  }
+
+  function moveLayer(itemId: number, where: 'front' | 'back' | 'up' | 'down') {
+    const list = ordered();
+    const i = list.findIndex((x) => x.id === itemId);
+    if (i < 0) return;
+    const [it] = list.splice(i, 1);
+    if (where === 'front') list.push(it);
+    else if (where === 'back') list.unshift(it);
+    else if (where === 'up') list.splice(Math.min(list.length, i + 1), 0, it);
+    else list.splice(Math.max(0, i - 1), 0, it);
+    applyZ(list);
+    toast(
+      where === 'front' ? 'Brought to front'
+      : where === 'back' ? 'Sent to back'
+      : where === 'up' ? 'Moved forward' : 'Moved back'
+    );
   }
 
   async function shareBoard() {
@@ -393,6 +536,22 @@ export default function Board() {
           }}
         />
         <div className="grow" />
+        {board && (
+          <button
+            className="presence"
+            title="Collaborators"
+            onClick={() => { haptic.tap(); setShowPeople(true); }}
+          >
+            <span className={'live-dot' + (connected ? ' on' : '')} />
+            {peers.slice(0, 3).map((p) => (
+              <span key={p.sid} className="pav" style={{ background: p.color }}>
+                {p.username.charAt(0).toUpperCase()}
+              </span>
+            ))}
+            {peers.length > 3 && <span className="pav more">+{peers.length - 3}</span>}
+            <UserPlus size={17} />
+          </button>
+        )}
         <button
           className="btn icon ghost"
           title="Background"
@@ -467,8 +626,14 @@ export default function Board() {
                 </div>
               </div>
             )}
+            {peers.map((p) =>
+              p.x == null || p.y == null ? null : (
+                <RemoteCursor key={p.sid} peer={p} k={view.k} />
+              )
+            )}
             {(strokes.current.length > 0 || liveStroke) && (
               <svg
+                key={`ink-${eraseTick}`}
                 style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 5000 }}
                 width="1" height="1"
               >
@@ -511,7 +676,7 @@ export default function Board() {
           <button title="Sticky note (N)" onClick={() => { haptic.tap(); addItem({ type: 'sticky', data: { text: '' } }); }}>
             <StickyNote size={20} />
           </button>
-          <button title="Pin a link" onClick={() => { haptic.tap(); addLink(); }}><Link2 size={20} /></button>
+          <button title="Pin a link" onClick={() => { haptic.tap(); setLinkDlg(true); }}><Link2 size={20} /></button>
           <button title="Image" onClick={() => { haptic.tap(); fileRef.current?.click(); }}><ImagePlus size={20} /></button>
           <button
             title="Checklist"
@@ -531,6 +696,13 @@ export default function Board() {
             onClick={() => { haptic.tap(); setShowShapes((v) => !v); setShowColors(false); }}
           >
             <Shapes size={20} />
+          </button>
+          <button
+            className={tool === 'erase' ? 'on' : ''}
+            title="Eraser (E)"
+            onClick={() => { haptic.tap(); setTool((t) => (t === 'erase' ? 'select' : 'erase')); setSel(null); }}
+          >
+            <Eraser size={20} />
           </button>
           <button
             className={tool === 'draw' ? 'on' : ''}
@@ -614,11 +786,30 @@ export default function Board() {
             <div className="tb-div" />
             <button
               title="Undo last stroke"
-              onClick={() => { strokes.current = strokes.current.slice(0, -1); setLiveStroke(null); haptic.tap(); }}
+              onClick={() => { strokes.current = strokes.current.slice(0, -1); setLiveStroke(null); setEraseTick((t) => t + 1); haptic.tap(); }}
+            >
+              <Undo2 size={19} />
+            </button>
+            <button
+              title="Eraser (E)"
+              onClick={() => { haptic.tap(); setTool('erase'); }}
             >
               <Eraser size={19} />
             </button>
             <button title="Finish drawing" className="on" onClick={commitDrawing}>
+              <Check size={20} />
+            </button>
+          </div>
+        )}
+
+        {tool === 'erase' && (
+          <div className="board-toolbar draw-bar" style={{ bottom: 86 }}>
+            <span className="tb-hint">Eraser — drag over ink to rub it out</span>
+            <div className="tb-div" />
+            <button title="Back to drawing" onClick={() => { haptic.tap(); setTool('draw'); }}>
+              <Pencil size={19} />
+            </button>
+            <button title="Done" className="on" onClick={() => { haptic.tap(); strokes.current.length ? commitDrawing() : setTool('select'); }}>
               <Check size={20} />
             </button>
           </div>
@@ -634,7 +825,70 @@ export default function Board() {
           </div>
         )}
 
+        {selected && tool === 'select' && (
+          <div className="board-toolbar sel-bar">
+            <span className="tb-hint">Layer {ordered().findIndex((x) => x.id === selected.id) + 1}/{items.length}</span>
+            <div className="tb-div" />
+            <button title="Send to back (Shift+[)" onClick={() => moveLayer(selected.id, 'back')}><SendToBack size={19} /></button>
+            <button title="Move back ([)" onClick={() => moveLayer(selected.id, 'down')}><ChevronDown size={19} /></button>
+            <button title="Move forward (])" onClick={() => moveLayer(selected.id, 'up')}><ChevronUp size={19} /></button>
+            <button title="Bring to front (Shift+])" onClick={() => moveLayer(selected.id, 'front')}><BringToFront size={19} /></button>
+            <div className="tb-div" />
+            {selected.type === 'link' && (
+              <button title="Edit link" onClick={() => { haptic.tap(); setEditLink(selected); }}><Pencil size={19} /></button>
+            )}
+            {selected.type === 'image' && (
+              <button title="Replace image" onClick={() => { haptic.tap(); replaceRef.current?.click(); }}><ImageIcon size={19} /></button>
+            )}
+            {(selected.type === 'shape' || selected.type === 'sticky' || selected.type === 'text') && (
+              <button title="Colour" onClick={() => { haptic.tap(); setShowColors((v) => !v); }}><Palette size={19} /></button>
+            )}
+            <button title="Duplicate" onClick={() => duplicate(selected)}><Copy size={19} /></button>
+            <button title="Delete" onClick={() => removeItem(selected.id)}><Trash2 size={19} /></button>
+          </div>
+        )}
+
+        {(linkDlg || editLink) && (
+          <LinkDialog
+            initial={editLink?.data?.url || ''}
+            editing={!!editLink}
+            onClose={() => { setLinkDlg(false); setEditLink(null); }}
+            onSave={async (meta) => {
+              if (editLink) {
+                update(editLink.id, { data: meta });
+                haptic.success();
+                toast('Link updated');
+              } else {
+                await addLink(meta);
+              }
+              setLinkDlg(false);
+              setEditLink(null);
+            }}
+          />
+        )}
+
+        {showPeople && board && (
+          <PeopleDialog boardId={board.id} peers={peers} onClose={() => setShowPeople(false)} />
+        )}
+
         <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => addImage(e.target.files)} />
+        <input
+          ref={replaceRef}
+          type="file"
+          accept="image/*"
+          hidden
+          onChange={async (e) => {
+            const f = e.target.files?.[0];
+            e.target.value = '';
+            if (!f || !selected) return;
+            try {
+              const up = await uploadImage(f);
+              update(selected.id, { data: { ...selected.data, url: up.url } });
+              haptic.success();
+              toast('Image replaced');
+            } catch (err: any) { toast(err.message, 'err'); }
+          }}
+        />
       </div>
     </>
   );
@@ -704,10 +958,14 @@ function Item({
               width: wide ? Math.min(it.w * 0.42, 190) : undefined,
               backgroundImage: d.image ? `url(${d.image})` : undefined,
               backgroundSize: d.isProduct ? 'contain' : 'cover',
+              backgroundPosition: 'center',
               backgroundRepeat: 'no-repeat',
-              backgroundColor: d.isProduct ? '#fff' : undefined,
+              // No photo? Tint the banner with the site's own brand colour.
+              background: d.image ? undefined : brandGradient(d),
+              backgroundColor: d.image && d.isProduct ? '#fff' : undefined,
             }}
           >
+            {!d.image && <LinkFallback meta={d} small={it.w < 220} />}
             {d.discountPercent ? <span className="lc-off">-{d.discountPercent}%</span> : null}
           </div>
         )}
@@ -808,30 +1066,15 @@ function Item({
   if (it.type === 'shape') {
     const kind = it.data.shape || 'rect';
     const fill = STICKY_COLORS[it.color] || STICKY_COLORS.yellow;
-    const stroke = it.data.stroke ?? true;
-    const common = { fill: it.data.filled === false ? 'none' : fill, stroke: stroke ? 'rgba(0,0,0,.42)' : 'none', strokeWidth: 2.5 };
+    const filled = it.data.filled !== false;
     return (
       <div
         className={cls('board-item shape-item')}
         style={{ ...base, background: 'transparent', border: 'none', boxShadow: 'none', overflow: 'visible' }}
         onPointerDown={(e) => onMoveStart(e, it)}
       >
-        <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ display: 'block', overflow: 'visible' }}>
-          {kind === 'rect' && <rect x="2" y="2" width="96" height="96" rx="7" {...common} />}
-          {kind === 'ellipse' && <ellipse cx="50" cy="50" rx="48" ry="48" {...common} />}
-          {kind === 'triangle' && <polygon points="50,3 97,97 3,97" {...common} />}
-          {kind === 'diamond' && <polygon points="50,2 98,50 50,98 2,50" {...common} />}
-          {kind === 'star' && (
-            <polygon points="50,3 61,38 98,38 68,60 79,95 50,73 21,95 32,60 2,38 39,38" {...common} />
-          )}
-          {kind === 'arrow' && (
-            <g>
-              <line x1="4" y1="50" x2="88" y2="50" stroke={fill} strokeWidth="9" strokeLinecap="round" />
-              <polygon points="76,28 99,50 76,72" fill={fill} />
-            </g>
-          )}
-          {kind === 'line' && <line x1="3" y1="50" x2="97" y2="50" stroke={fill} strokeWidth="8" strokeLinecap="round" />}
-        </svg>
+        {/* Drawn in real pixel space so strokes and corners never distort. */}
+        <ShapeSvg kind={kind} w={it.w} h={it.h} fill={filled ? fill : 'none'} stroke="rgba(0,0,0,.42)" />
         {it.data.label ? <div className="shape-label">{it.data.label}</div> : null}
         <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
       </div>
@@ -880,6 +1123,319 @@ function Item({
       />
       <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
     </div>
+  );
+}
+
+/**
+ * Renders a shape at its true pixel size. Using the element's own width/height
+ * as the viewBox (instead of a fixed 0 0 100 100 box with preserveAspectRatio="none")
+ * keeps stroke weight even and corner radii circular no matter how the item is
+ * squashed or stretched.
+ */
+/** Gradient used when a link has no image — tinted by the site's brand colour. */
+export function brandGradient(meta: any) {
+  const c = meta?.brandColor || '#6d5efc';
+  return `linear-gradient(135deg, ${c} 0%, ${c}cc 45%, rgba(0,0,0,.42) 100%)`;
+}
+
+/** Big initial shown on imageless link cards. */
+export function LinkFallback({ meta, small }: { meta: any; small?: boolean }) {
+  const label = (meta?.siteName || hostOf(meta?.url || '') || '?').replace(/^www\./, '');
+  return (
+    <div className="lc-fallback" style={{ background: brandGradient(meta) }}>
+      {meta?.favicon ? (
+        <img src={meta.favicon} alt="" onError={(e) => ((e.target as HTMLElement).style.display = 'none')} />
+      ) : null}
+      <span style={{ fontSize: small ? 15 : 21 }}>{label.charAt(0).toUpperCase()}</span>
+    </div>
+  );
+}
+
+/**
+ * In-app link dialog. Fetches metadata as you type and shows the card exactly
+ * as it will appear on the board, so nothing is added blind.
+ */
+function LinkDialog({
+  initial, editing, onClose, onSave,
+}: {
+  initial: string;
+  editing: boolean;
+  onClose: () => void;
+  onSave: (meta: any) => void | Promise<void>;
+}) {
+  const [url, setUrl] = useState(initial);
+  const [meta, setMeta] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [saving, setSaving] = useState(false);
+  const seq = useRef(0);
+
+  useEffect(() => {
+    const raw = url.trim();
+    if (!raw || !/\.\w{2,}/.test(raw)) { setMeta(null); setErr(''); return; }
+    const mine = ++seq.current;
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try {
+        const m = await api.post<any>('/unfurl', { url: raw });
+        if (seq.current !== mine) return;           // a newer keystroke won
+        setMeta(m);
+        setErr(m.blocked ? 'That site blocked the preview — title taken from the URL.' : '');
+      } catch (e: any) {
+        if (seq.current === mine) { setMeta(null); setErr(e.message || 'Could not reach that page'); }
+      } finally {
+        if (seq.current === mine) setLoading(false);
+      }
+    }, 450);
+    return () => clearTimeout(t);
+  }, [url]);
+
+  const save = async () => {
+    const raw = url.trim();
+    if (!raw) return;
+    setSaving(true);
+    const payload = meta?.url && meta.url.includes(raw.replace(/^https?:\/\//, '').split('/')[0])
+      ? meta
+      : { url: /^https?:\/\//i.test(raw) ? raw : 'https://' + raw, title: raw, isProduct: false };
+    await onSave(payload);
+    setSaving(false);
+  };
+
+  return (
+    <Sheet onClose={onClose} maxWidth={440}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)' }}>
+        {editing ? 'Edit link' : 'Pin a link'}
+      </h3>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 13 }}>
+        Paste any URL — products show their price and photo.
+      </p>
+
+      <input
+        className="input no-drag"
+        autoFocus
+        placeholder="https://example.com/product"
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !loading) save(); }}
+      />
+
+      <div className="lc-preview-wrap">
+        {loading && <div className="lc-preview-empty"><span className="spinner" /> Fetching preview…</div>}
+        {!loading && !meta && <div className="lc-preview-empty">Preview appears here</div>}
+        {!loading && meta && (
+          <div className="board-item link-card lc-preview" style={{ width: 260, height: meta.isProduct ? 250 : 200 }}>
+            <div
+              className="lc-thumb"
+              style={{
+                height: '50%',
+                backgroundImage: meta.image ? `url(${meta.image})` : undefined,
+                backgroundSize: meta.isProduct ? 'contain' : 'cover',
+                backgroundPosition: 'center',
+                backgroundRepeat: 'no-repeat',
+                background: meta.image ? undefined : brandGradient(meta),
+                backgroundColor: meta.image && meta.isProduct ? '#fff' : undefined,
+              }}
+            >
+              {!meta.image && <LinkFallback meta={meta} />}
+              {meta.discountPercent ? <span className="lc-off">-{meta.discountPercent}%</span> : null}
+            </div>
+            <div className="lc-body">
+              <div className="lc-title" style={{ WebkitLineClamp: 2 }}>{meta.title}</div>
+              {meta.isProduct && meta.priceFormatted && (
+                <div className="lc-price-row">
+                  <span className="lc-price">{meta.priceFormatted}</span>
+                  {meta.listPriceFormatted && <s className="lc-was">{meta.listPriceFormatted}</s>}
+                </div>
+              )}
+              <div className="lc-host">{meta.siteName || hostOf(meta.url)}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {err && <div className="lc-warn">{err}</div>}
+
+      <div className="row" style={{ gap: 8, marginTop: 14 }}>
+        <button className="btn ghost" onClick={onClose}>Cancel</button>
+        <div className="grow" />
+        <button className="btn primary" disabled={!url.trim() || saving} onClick={save}>
+          {saving ? 'Saving…' : editing ? 'Update link' : 'Add to board'}
+        </button>
+      </div>
+    </Sheet>
+  );
+}
+
+/** Another editor's pointer, drawn in board space so it tracks pan and zoom. */
+function RemoteCursor({ peer, k }: { peer: Peer; k: number }) {
+  return (
+    <div
+      className="rcursor"
+      style={{
+        left: peer.x!, top: peer.y!, zIndex: 9999,
+        // Counter-scale so the cursor stays a constant size on screen.
+        transform: `scale(${1 / k})`,
+      }}
+    >
+      <svg width="22" height="22" viewBox="0 0 22 22">
+        <path d="M3 2l14 6.5-6 1.6-2.4 5.6z" fill={peer.color} stroke="#fff" strokeWidth="1.4" strokeLinejoin="round" />
+      </svg>
+      <span className="rname" style={{ background: peer.color }}>{peer.username}</span>
+    </div>
+  );
+}
+
+/** Invite people to edit this board. */
+function PeopleDialog({
+  boardId, peers, onClose,
+}: { boardId: number; peers: Peer[]; onClose: () => void }) {
+  const [data, setData] = useState<any>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const { toast } = useApp();
+
+  const load = useCallback(async () => {
+    try { setData(await api.get<any>(`/boards/${boardId}/collaborators`)); }
+    catch { /* board may have been removed */ }
+  }, [boardId]);
+  useEffect(() => { load(); }, [load]);
+
+  const online = (userId: number) => peers.some((p) => p.id === userId);
+
+  const invite = async () => {
+    const u = name.trim();
+    if (!u) return;
+    setBusy(true); setErr('');
+    try {
+      await api.post(`/boards/${boardId}/collaborators`, { username: u });
+      setName('');
+      haptic.success();
+      toast(`${u} can now edit this board`);
+      load();
+    } catch (e: any) { setErr(e.message || 'Could not invite that user'); }
+    finally { setBusy(false); }
+  };
+
+  const remove = async (userId: number, username: string) => {
+    await api.del(`/boards/${boardId}/collaborators/${userId}`);
+    toast(`Removed ${username}`);
+    load();
+  };
+
+  return (
+    <Sheet onClose={onClose} maxWidth={420}>
+      <h3 style={{ margin: '0 0 4px', fontFamily: 'var(--font-display)' }}>Collaborators</h3>
+      <p className="muted" style={{ margin: '0 0 14px', fontSize: 13 }}>
+        Invited people can edit this board live and you'll see their cursors.
+      </p>
+
+      {data?.isOwner && (
+        <>
+          <div className="row" style={{ gap: 8 }}>
+            <input
+              className="input no-drag"
+              placeholder="Username to invite"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && invite()}
+            />
+            <button className="btn primary" disabled={busy || !name.trim()} onClick={invite}>Invite</button>
+          </div>
+          {err && <div className="lc-warn">{err}</div>}
+        </>
+      )}
+
+      <div className="people-list">
+        {data?.owner && (
+          <div className="person">
+            <span className="pav lg" style={{ background: '#6d5efc' }}>
+              {data.owner.username.charAt(0).toUpperCase()}
+            </span>
+            <div className="grow">
+              <div style={{ fontWeight: 650 }}>{data.owner.username}</div>
+              <div className="muted" style={{ fontSize: 12 }}>Owner</div>
+            </div>
+            {online(data.owner.id) && <span className="live-tag">online</span>}
+          </div>
+        )}
+        {data?.collaborators?.map((c: any) => (
+          <div className="person" key={c.id}>
+            <span className="pav lg" style={{ background: peers.find((p) => p.id === c.id)?.color || '#8a8f98' }}>
+              {c.username.charAt(0).toUpperCase()}
+            </span>
+            <div className="grow">
+              <div style={{ fontWeight: 650 }}>{c.username}</div>
+              <div className="muted" style={{ fontSize: 12 }}>{c.role}</div>
+            </div>
+            {online(c.id) && <span className="live-tag">online</span>}
+            {data.isOwner && (
+              <button className="btn icon ghost sm" title="Remove" onClick={() => remove(c.id, c.username)}>
+                <X size={16} />
+              </button>
+            )}
+          </div>
+        ))}
+        {data && !data.collaborators?.length && (
+          <div className="muted" style={{ fontSize: 13, padding: '10px 2px' }}>
+            {data.isOwner ? 'No one invited yet.' : 'Only you and the owner are here.'}
+          </div>
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+function ShapeSvg({
+  kind, w, h, fill, stroke, sw = 2.5,
+}: { kind: string; w: number; h: number; fill: string; stroke: string; sw?: number }) {
+  const W = Math.max(1, w), H = Math.max(1, h);
+  const i = sw / 2 + 0.5;                       // inset so the stroke stays inside
+  const common = { fill, stroke, strokeWidth: sw, strokeLinejoin: 'round' as const };
+  const pts = (arr: number[][]) => arr.map(([px, py]) => `${px},${py}`).join(' ');
+  // Corner radius scales with the shorter side, so wide rectangles stay sane.
+  const r = Math.max(2, Math.min(14, Math.min(W, H) * 0.09));
+  const body = () => {
+    switch (kind) {
+      case 'ellipse':
+        return <ellipse cx={W / 2} cy={H / 2} rx={Math.max(1, W / 2 - i)} ry={Math.max(1, H / 2 - i)} {...common} />;
+      case 'triangle':
+        return <polygon points={pts([[W / 2, i], [W - i, H - i], [i, H - i]])} {...common} />;
+      case 'diamond':
+        return <polygon points={pts([[W / 2, i], [W - i, H / 2], [W / 2, H - i], [i, H / 2]])} {...common} />;
+      case 'star': {
+        const cx = W / 2, cy = H / 2, rx = W / 2 - i, ry = H / 2 - i, p: number[][] = [];
+        for (let k = 0; k < 10; k++) {
+          const ang = (Math.PI / 5) * k - Math.PI / 2;
+          const f = k % 2 ? 0.44 : 1;
+          p.push([cx + Math.cos(ang) * rx * f, cy + Math.sin(ang) * ry * f]);
+        }
+        return <polygon points={pts(p)} {...common} />;
+      }
+      case 'arrow': {
+        // Head keeps a fixed proportion of the height, so long arrows stay arrow-shaped.
+        const head = Math.min(W * 0.4, H * 0.9);
+        const bar = Math.max(3, Math.min(H * 0.28, 18));
+        const cy = H / 2, c = fill === 'none' ? stroke : fill;
+        return (
+          <g>
+            <line x1={i} y1={cy} x2={Math.max(i, W - head)} y2={cy} stroke={c} strokeWidth={bar} strokeLinecap="round" />
+            <polygon points={pts([[W - head, cy - head / 2], [W - i, cy], [W - head, cy + head / 2]])} fill={c} />
+          </g>
+        );
+      }
+      case 'line': {
+        const c = fill === 'none' ? stroke : fill;
+        return <line x1={i} y1={H / 2} x2={W - i} y2={H / 2} stroke={c} strokeWidth={Math.max(3, Math.min(H * 0.3, 16))} strokeLinecap="round" />;
+      }
+      default:
+        return <rect x={i} y={i} width={Math.max(1, W - sw - 1)} height={Math.max(1, H - sw - 1)} rx={r} {...common} />;
+    }
+  };
+  return (
+    <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: 'block', overflow: 'visible' }}>
+      {body()}
+    </svg>
   );
 }
 

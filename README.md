@@ -17,7 +17,28 @@ in your notes, and proper multi-user accounts. Installs to your phone's home scr
 - **Link cards resize dynamically** — the layout reflows as you drag the handle: compact pill
   when small, side-by-side thumbnail when wide, full banner plus description when tall.
 - **Product links** — paste an Amazon/eBay/shop URL and Noty pulls the product image, price,
-  original price and a `-30%` discount tag straight onto the card.
+  original price and a `-30%` discount tag straight onto the card. Retailers that block
+  scraping still get a sensible card: the name is recovered from the URL slug.
+- **In-app link dialog** — the preview renders the exact card before you add it, so nothing
+  is pinned blind. The same dialog edits links on existing cards.
+- **Brand-coloured embeds** — links without a photo get a gradient built from the site's
+  own `theme-color` (or a stable colour derived from the domain) instead of a grey box.
+- **Eraser tool** (`E`) — rub out ink by dragging over it; whole strokes are removed, and a
+  drawing that loses all its strokes deletes itself.
+- **Layer management** — bring to front / send to back / step up / step down from the
+  selection bar, or `]` and `[` (add Shift to jump to the very front or back).
+- **Replace images** — swap the photo in an existing image frame without recreating it.
+
+### Live collaboration
+
+Invite other Noty users to a board and edit it together in real time:
+
+- Owners invite by username from the **Collaborators** button in the board header.
+- Invited editors see the board in their own list, flagged as shared.
+- Everyone's cursor is shown live, colour-coded and labelled with their name.
+- Item creates, moves, edits and deletes replicate instantly to everyone viewing.
+- Presence runs over a WebSocket at `/api/collab`; if it cannot connect the board degrades
+  gracefully to normal single-user editing.
 
 ## Features
 
