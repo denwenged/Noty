@@ -95,7 +95,61 @@ openssl rand -hex 32
 | `JWT_SECRET` | `please-change-me`| Signs login tokens — **change this**      |
 | `DATA_DIR`   | `/data`           | SQLite database + uploaded images         |
 
-Everything (database and uploads) lives in the `noty-data` volume, so containers stay disposable:
+### Where the data lives
+
+Noty writes **everything** under `DATA_DIR` (default `/data` inside the container):
+
+```
+/data
+├── noty.db          # SQLite: users, notes, boards, board items, shares, settings
+├── noty.db-wal      # write-ahead log (WAL mode) — part of the database, don't delete
+├── noty.db-shm      # shared-memory index — same
+└── uploads/         # uploaded images
+```
+
+The default Compose file maps that to the **named volume** `noty-data`, which survives
+`docker compose down`, `restart`, `up --build` and image rebuilds.
+
+Confirm what the running container is actually using:
+
+```bash
+curl -s localhost:8080/api/health     # -> {"ok":true,"dataDir":"/data","dbPath":"/data/noty.db"}
+docker compose logs noty | grep noty  # -> [noty] database = /data/noty.db (existing — data preserved)
+```
+
+On every boot Noty logs whether it opened an **existing** database or created a **new** one.
+If it says `NEW` on a restart, the data is not persisting — see below.
+
+#### If your data resets every restart
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `docker compose down -v` was used | `-v` deletes named volumes — that is its job | Use `docker compose down` |
+| `/data` on the host is empty and data resets | You bind-mounted a host dir that doesn't match the app's `DATA_DIR`, or you're looking at the host `/data` while the app writes to the *named volume* | Check `/api/health`; the default setup stores data in the volume, **not** in a host `/data` |
+| Log says `FATAL: DATA_DIR is not writable (EACCES)` | Bind-mounted host dir is root-owned; the container runs as uid `1000` | `sudo chown -R 1000:1000 /your/host/dir` |
+| Container recreated with a different project name | Compose namespaces volumes per project dir | Run `docker compose` from the same directory, or set `name:` in the compose file |
+
+To use a **host directory** instead of the named volume, replace the volume line in
+`docker-compose.yml` and fix ownership — this is the usual reason a mounted `/data` looks empty:
+
+```yaml
+    volumes:
+      - /srv/noty-data:/data      # host path : container path
+```
+
+```bash
+sudo mkdir -p /srv/noty-data && sudo chown -R 1000:1000 /srv/noty-data
+docker compose up -d --force-recreate
+```
+
+Inspect or back up the named volume directly:
+
+```bash
+docker volume inspect noty_noty-data                 # real path on disk
+docker run --rm -v noty_noty-data:/d alpine ls -la /d
+docker run --rm -v noty_noty-data:/d -v "$PWD":/b alpine tar czf /b/noty-backup.tgz -C /d .
+```
+
 
 ```bash
 docker compose down          # stop, keep data

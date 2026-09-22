@@ -2,13 +2,33 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
+export const DATA_DIR = process.env.DATA_DIR || path.resolve(process.cwd(), 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(path.join(DATA_DIR, 'uploads'), { recursive: true });
 
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
-export const db = new Database(path.join(DATA_DIR, 'noty.db'));
+export const DB_PATH = path.join(DATA_DIR, 'noty.db');
+const existedBefore = fs.existsSync(DB_PATH);
+
+// Startup diagnostics: makes "my data keeps resetting" immediately debuggable.
+try {
+  const probe = path.join(DATA_DIR, '.write-test');
+  fs.writeFileSync(probe, 'ok');
+  fs.unlinkSync(probe);
+} catch (err) {
+  console.error(
+    `[noty] FATAL: DATA_DIR "${DATA_DIR}" is not writable (${err.code}).\n` +
+    `[noty] If you bind-mounted a host directory, it is probably owned by root while\n` +
+    `[noty] this container runs as uid 1000. Fix with:  sudo chown -R 1000:1000 <hostdir>`
+  );
+  throw err;
+}
+
+console.log(`[noty] DATA_DIR   = ${DATA_DIR}`);
+console.log(`[noty] database   = ${DB_PATH} (${existedBefore ? 'existing — data preserved' : 'NEW — empty database created'})`);
+
+export const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 

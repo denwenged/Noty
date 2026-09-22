@@ -3,7 +3,7 @@ import cookieParser from 'cookie-parser';
 import path from 'node:path';
 import fs from 'node:fs';
 import { attachUser } from './auth.js';
-import './db.js';
+import { DATA_DIR, DB_PATH } from './db.js';
 import authRoutes from './routes/auth.js';
 import noteRoutes from './routes/notes.js';
 import boardRoutes from './routes/boards.js';
@@ -16,7 +16,9 @@ app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser());
 app.use(attachUser);
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get('/api/health', (_req, res) =>
+  res.json({ ok: true, ts: Date.now(), dataDir: DATA_DIR, dbPath: DB_PATH })
+);
 app.use('/api/auth', authRoutes);
 app.use('/api/notes', noteRoutes);
 app.use('/api/boards', boardRoutes);
