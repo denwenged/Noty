@@ -5,6 +5,7 @@ import {
   Maximize, Palette, Grid3x3, Type, CheckSquare, Square, Plus, X, Frame,
   Shapes, Pencil, Check, Eraser, Undo2, BringToFront, SendToBack,
   ChevronUp, ChevronDown, Image as ImageIcon, UserPlus,
+  Bold, Italic, AlignLeft, AlignCenter, AlignRight, Minus,
 } from 'lucide-react';
 import { api, uploadImage, CANVAS_PRESETS, type Board as BoardT, type BoardItem } from '../api';
 import { useApp } from '../store';
@@ -15,7 +16,7 @@ import { useCollab, type Peer } from '../lib/collab';
 
 type Drag =
   | { kind: 'pan'; sx: number; sy: number; ox: number; oy: number }
-  | { kind: 'move'; id: number; sx: number; sy: number; ix: number; iy: number }
+  | { kind: 'move'; id: number; sx: number; sy: number; ix: number; iy: number; moved: boolean }
   | { kind: 'resize'; id: number; sx: number; sy: number; iw: number; ih: number }
   | null;
 
@@ -42,9 +43,20 @@ export default function Board() {
   const [editLink, setEditLink] = useState<BoardItem | null>(null);
   const replaceRef = useRef<HTMLInputElement>(null);
   const [showPeople, setShowPeople] = useState(false);
+  /** Strokes other people are drawing right now, keyed by their session id. */
+  const [peerInk, setPeerInk] = useState<Record<string, { pts: number[][]; c: string; w: number }[]>>({});
 
   /* ---- live collaboration: apply changes made by other editors ---- */
   const applyRemote = useCallback((m: any) => {
+    if (m.t === 'ink') {
+      // Live stroke from another editor — shown until they commit it.
+      setPeerInk((cur) => ({ ...cur, [m.sid]: m.strokes || [] }));
+      return;
+    }
+    if (m.t === 'ink:end') {
+      setPeerInk((cur) => { const n = { ...cur }; delete n[m.sid]; return n; });
+      return;
+    }
     if (m.t === 'item:add' && m.item) {
       setItems((cur) => (cur.some((c) => c.id === m.item.id) ? cur : [...cur, m.item]));
     } else if (m.t === 'item:update' && m.item) {
@@ -56,6 +68,14 @@ export default function Board() {
     }
   }, []);
   const { peers, connected, send } = useCollab(board?.id, applyRemote);
+  // Drop ink belonging to sessions that have gone.
+  useEffect(() => {
+    setPeerInk((cur) => {
+      const live = new Set(peers.map((p) => p.sid));
+      const next = Object.fromEntries(Object.entries(cur).filter(([sid]) => live.has(sid)));
+      return Object.keys(next).length === Object.keys(cur).length ? cur : next;
+    });
+  }, [peers]);
   const sendRef = useRef<typeof send | null>(null);
   sendRef.current = send;
   const [eraseTick, setEraseTick] = useState(0);
@@ -234,7 +254,12 @@ export default function Board() {
     if (liveStroke) {
       if (e.pointerType === 'mouse' && e.buttons === 0) { finishStroke(); return; }
       const p = toBoardCoords(e.clientX, e.clientY);
-      setLiveStroke((st) => (st ? [...st, [Math.round(p.x), Math.round(p.y)]] : st));
+      setLiveStroke((st) => {
+        if (!st) return st;
+        const next = [...st, [Math.round(p.x), Math.round(p.y)]];
+        shareInk(next);
+        return next;
+      });
       return;
     }
     if (drag && e.pointerType === 'mouse' && e.buttons === 0) { onPointerUp(e); return; }
@@ -258,6 +283,9 @@ export default function Board() {
     const dy = e.clientY - drag.sy;
     if (drag.kind === 'pan') setView((v) => ({ ...v, x: drag.ox + dx, y: drag.oy + dy }));
     else if (drag.kind === 'move') {
+      // Ignore sub-pixel jitter: a click selects, it should never nudge.
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      if (!drag.moved) setDrag({ ...drag, moved: true });
       const it = items.find((i) => i.id === drag.id);
       const p = clampToCanvas(drag.ix + dx / view.k, drag.iy + dy / view.k, it?.w ?? 0, it?.h ?? 0);
       update(drag.id, p, false);
@@ -270,11 +298,23 @@ export default function Board() {
       );
   };
 
+  const lastInk = useRef(0);
+  /** Mirror the in-progress sketch to other editors. */
+  const shareInk = (extra?: number[][]) => {
+    const now = performance.now();
+    if (now - lastInk.current < 70) return;
+    lastInk.current = now;
+    const all = extra ? [...strokes.current, { pts: extra, c: penColor, w: penWidth }] : strokes.current;
+    sendRef.current?.({ t: 'ink', strokes: all });
+  };
+
   const finishStroke = () => {
     setLiveStroke((st) => {
       if (st && st.length > 1) strokes.current.push({ pts: st, c: penColor, w: penWidth });
       return null;
     });
+    lastInk.current = 0;
+    shareInk();
   };
 
   const onPointerUp = (e?: React.PointerEvent) => {
@@ -295,12 +335,15 @@ export default function Board() {
   };
 
   const startMove = (e: React.PointerEvent, it: BoardItem) => {
+    // Left/primary button only — right-click shouldn't start a drag.
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
     if (e.pointerType !== 'mouse') haptic.press();
     setSel(it.id);
+    // Don't reshuffle z on every touch; only lift it if something covers it.
     const z = maxZ() + 1;
     if (it.z < z - 1) update(it.id, { z });
-    setDrag({ kind: 'move', id: it.id, sx: e.clientX, sy: e.clientY, ix: it.x, iy: it.y });
+    setDrag({ kind: 'move', id: it.id, sx: e.clientX, sy: e.clientY, ix: it.x, iy: it.y, moved: false });
     capture(e.pointerId);
   };
 
@@ -378,7 +421,7 @@ export default function Board() {
         else { setTool('draw'); setSel(null); }
       }
       if (e.key === 'Escape') {
-        if (tool === 'draw') { strokes.current = []; setLiveStroke(null); setTool('select'); }
+        if (tool === 'draw') { strokes.current = []; setLiveStroke(null); setTool('select'); sendRef.current?.({ t: 'ink:end' }); }
         setSel(null);
         setShowShapes(false);
       }
@@ -421,31 +464,108 @@ export default function Board() {
   const ERASER_R = 14;
 
   /** Erase uncommitted strokes under the cursor, and saved drawings they belong to. */
+  /**
+   * Erase only the ink actually under the cursor.
+   *
+   * Each stroke is walked point by point; points inside the eraser disc are
+   * dropped and the surviving runs become separate strokes. Rubbing through the
+   * middle of a line therefore leaves the two ends intact instead of deleting
+   * the whole trace. Segments that merely *cross* the disc are split too, so a
+   * long straight line with few points still erases where you touch it.
+   */
+  function eraseStroke<T extends { pts: number[][]; c: string; w: number }>(
+    st: T,
+    x: number,
+    y: number,
+    r: number
+  ): T[] {
+    const tol = r + st.w / 2;
+    const inside = (p: number[]) => Math.hypot(p[0] - x, p[1] - y) <= tol;
+
+    // Densify long segments so erasing works mid-segment, not just on vertices.
+    const dense: number[][] = [];
+    for (let i = 0; i < st.pts.length; i++) {
+      const p = st.pts[i];
+      if (i > 0) {
+        const q = st.pts[i - 1];
+        const d = Math.hypot(p[0] - q[0], p[1] - q[1]);
+        const steps = Math.min(64, Math.floor(d / Math.max(2, tol / 2)));
+        for (let k = 1; k < steps; k++) {
+          dense.push([q[0] + ((p[0] - q[0]) * k) / steps, q[1] + ((p[1] - q[1]) * k) / steps]);
+        }
+      }
+      dense.push(p);
+    }
+
+    const runs: number[][][] = [];
+    let cur: number[][] = [];
+    for (const p of dense) {
+      if (inside(p)) {
+        if (cur.length > 1) runs.push(cur);
+        cur = [];
+      } else {
+        cur.push(p);
+      }
+    }
+    if (cur.length > 1) runs.push(cur);
+
+    // Nothing was touched — hand the original back unchanged.
+    if (runs.length === 1 && runs[0].length === dense.length) return [st];
+    return runs.map((pts) => ({ ...st, pts }));
+  }
+
+  /** True when any part of a stroke lies under the eraser. */
+  function strokeTouched(st: { pts: number[][]; w: number }, x: number, y: number, r: number) {
+    const tol = r + st.w / 2;
+    if (st.pts.length === 1) return Math.hypot(x - st.pts[0][0], y - st.pts[0][1]) <= tol;
+    for (let i = 1; i < st.pts.length; i++) {
+      const [ax, ay] = st.pts[i - 1], [bx, by] = st.pts[i];
+      if (distToSeg(x, y, ax, ay, bx, by) <= tol) return true;
+    }
+    return false;
+  }
+
+  /** Bounding box of a stroke list, padded for stroke width. */
+  function strokesBox(list: { pts: number[][]; w: number }[]) {
+    const xs = list.flatMap((s) => s.pts.map((p) => p[0]));
+    const ys = list.flatMap((s) => s.pts.map((p) => p[1]));
+    const pad = Math.max(...list.map((s) => s.w)) + 4;
+    const minX = Math.min(...xs) - pad, minY = Math.min(...ys) - pad;
+    const maxX = Math.max(...xs) + pad, maxY = Math.max(...ys) + pad;
+    return { x: minX, y: minY, w: Math.max(20, maxX - minX), h: Math.max(20, maxY - minY) };
+  }
+
+  /** Erase ink under the cursor, in the working sketch and in saved drawings. */
   function eraseAt(x: number, y: number) {
     const r = ERASER_R / view.k + 4;
-    const hit = (st: { pts: number[][]; w: number }) => {
-      const tol = r + st.w / 2;
-      for (let i = 1; i < st.pts.length; i++) {
-        const [ax, ay] = st.pts[i - 1], [bx, by] = st.pts[i];
-        if (distToSeg(x, y, ax, ay, bx, by) <= tol) return true;
-      }
-      return st.pts.length === 1 && Math.hypot(x - st.pts[0][0], y - st.pts[0][1]) <= tol;
-    };
 
-    const before = strokes.current.length;
-    strokes.current = strokes.current.filter((st) => !hit(st));
-    if (strokes.current.length !== before) { setEraseTick((t) => t + 1); haptic.tap(); }
+    let changed = false;
+    strokes.current = strokes.current.flatMap((st) => {
+      if (!strokeTouched(st, x, y, r)) return [st];
+      changed = true;
+      return eraseStroke(st, x, y, r);
+    });
+    if (changed) { setEraseTick((t) => t + 1); haptic.tap(); lastInk.current = 0; shareInk(); }
 
-    // Saved drawing items: drop the strokes we touched, delete the item if empty.
     for (const it of items) {
       if (it.type !== 'draw') continue;
       if (x < it.x - r || y < it.y - r || x > it.x + it.w + r || y > it.y + it.h + r) continue;
       const list: { pts: number[][]; c: string; w: number }[] = it.data.strokes || [];
-      const kept = list.filter((st) => !hit(st));
-      if (kept.length === list.length) continue;
+      let hitAny = false;
+      const kept = list.flatMap((st) => {
+        if (!strokeTouched(st, x, y, r)) return [st];
+        hitAny = true;
+        return eraseStroke(st, x, y, r);
+      });
+      if (!hitAny) continue;
       haptic.tap();
       if (!kept.length) { removeItem(it.id); continue; }
-      update(it.id, { data: { ...it.data, strokes: kept } });
+      // Reflow the frame so the item keeps hugging its remaining ink.
+      const box = strokesBox(kept);
+      update(it.id, {
+        x: box.x, y: box.y, w: box.w, h: box.h,
+        data: { ...it.data, strokes: kept, viewBox: [box.x, box.y, box.w, box.h] },
+      });
     }
   }
 
@@ -465,10 +585,19 @@ export default function Board() {
       data: { strokes: all, viewBox: [minX, minY, w, h] },
     });
     strokes.current = [];
+    setEraseTick((t) => t + 1);
+    sendRef.current?.({ t: 'ink:end' });
     setItems((x) => [...x, it]);
+    sendRef.current?.({ t: 'item:add', item: it });   // show it on other screens
     haptic.success();
     setTool('select');
     toast('Drawing added');
+  }
+
+  /** Update one styling property on a text item. */
+  function setTextProp(it: BoardItem, key: string, value: unknown) {
+    haptic.tap();
+    update(it.id, { data: { ...it.data, [key]: value } });
   }
 
   /* ----------------------- layer management ----------------------- */
@@ -631,6 +760,22 @@ export default function Board() {
                 <RemoteCursor key={p.sid} peer={p} k={view.k} />
               )
             )}
+            {Object.entries(peerInk).map(([sid, list]) => (
+              <svg
+                key={`peer-${sid}`}
+                style={{ position: 'absolute', left: 0, top: 0, overflow: 'visible', pointerEvents: 'none', zIndex: 4999 }}
+                width="1" height="1"
+              >
+                {list.map((st, i) => (
+                  <polyline
+                    key={i}
+                    points={st.pts.map((p) => p.join(',')).join(' ')}
+                    fill="none" stroke={st.c} strokeWidth={st.w}
+                    strokeLinecap="round" strokeLinejoin="round" opacity={0.85}
+                  />
+                ))}
+              </svg>
+            ))}
             {(strokes.current.length > 0 || liveStroke) && (
               <svg
                 key={`ink-${eraseTick}`}
@@ -820,6 +965,71 @@ export default function Board() {
             {Object.entries(STICKY_COLORS).map(([name, hex]) => (
               <button key={name} onClick={() => { update(selected.id, { color: name }); setShowColors(false); }}>
                 <span style={{ width: 22, height: 22, borderRadius: 7, background: hex, display: 'block' }} />
+              </button>
+            ))}
+          </div>
+        )}
+
+        {selected?.type === 'text' && tool === 'select' && (
+          <div className="board-toolbar text-bar" style={{ bottom: 146 }}>
+            <button title="Smaller" onClick={() => setTextProp(selected, 'size', Math.max(11, (selected.data.size ?? 27) - 4))}>
+              <Minus size={17} />
+            </button>
+            <span className="tb-hint" style={{ minWidth: 38, textAlign: 'center' }}>{selected.data.size ?? 27}</span>
+            <button title="Bigger" onClick={() => setTextProp(selected, 'size', Math.min(160, (selected.data.size ?? 27) + 4))}>
+              <Plus size={17} />
+            </button>
+            <div className="tb-div" />
+            <button
+              title="Bold"
+              className={(selected.data.weight ?? 750) >= 700 ? 'on' : ''}
+              onClick={() => setTextProp(selected, 'weight', (selected.data.weight ?? 750) >= 700 ? 400 : 800)}
+            >
+              <Bold size={17} />
+            </button>
+            <button
+              title="Italic"
+              className={selected.data.italic ? 'on' : ''}
+              onClick={() => setTextProp(selected, 'italic', !selected.data.italic)}
+            >
+              <Italic size={17} />
+            </button>
+            <div className="tb-div" />
+            {([['left', AlignLeft], ['center', AlignCenter], ['right', AlignRight]] as const).map(([a, Ico]) => (
+              <button
+                key={a}
+                title={`Align ${a}`}
+                className={(selected.data.align || 'left') === a ? 'on' : ''}
+                onClick={() => setTextProp(selected, 'align', a)}
+              >
+                <Ico size={17} />
+              </button>
+            ))}
+            <div className="tb-div" />
+            <button
+              title="Heading / body font"
+              className={selected.data.font ? 'on' : ''}
+              onClick={() =>
+                setTextProp(selected, 'font', selected.data.font ? '' : 'var(--font-display)')
+              }
+            >
+              <Type size={17} />
+            </button>
+            {['', '#e5326b', '#f2681f', '#0aa87e', '#1e8fd5', '#6d5efc'].map((c) => (
+              <button
+                key={c || 'default'}
+                title={c ? 'Text colour' : 'Default colour'}
+                onClick={() => setTextProp(selected, 'color', c)}
+                style={{ width: 30 }}
+              >
+                <span
+                  style={{
+                    width: 16, height: 16, borderRadius: '50%',
+                    background: c || 'var(--text)', display: 'block',
+                    outline: (selected.data.color || '') === c ? '2.5px solid var(--accent)' : '1.5px solid var(--border)',
+                    outlineOffset: 2,
+                  }}
+                />
               </button>
             ))}
           </div>
@@ -1109,17 +1319,41 @@ function Item({
   }
 
   // text label
+  const td = it.data || {};
+  const align = td.align || 'left';
   return (
     <div
-      className={cls('board-item')}
-      style={{ ...base, background: 'transparent', border: selected ? undefined : '1px dashed transparent', boxShadow: 'none', padding: 4 }}
+      className={cls('board-item text-item')}
+      style={{
+        ...base,
+        background: td.bg || 'transparent',
+        border: 'none',
+        boxShadow: 'none',
+        padding: 4,
+        borderRadius: td.bg ? 12 : undefined,
+      }}
       onPointerDown={(e) => onMoveStart(e, it)}
     >
+      {/* Drag anywhere on the block; click once more to put the caret in. */}
       <textarea
-        value={it.data.text || ''}
-        onPointerDown={(e) => e.stopPropagation()}
-        onChange={(e) => onChange(it.id, { data: { ...it.data, text: e.target.value } })}
-        style={{ width: '100%', height: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'none', fontSize: 27, fontWeight: 750, letterSpacing: '-0.6px', color: 'var(--text)', fontFamily: 'inherit' }}
+        value={td.text || ''}
+        placeholder="Type…"
+        readOnly={!selected}
+        onPointerDown={(e) => { if (selected) e.stopPropagation(); }}
+        onChange={(e) => onChange(it.id, { data: { ...td, text: e.target.value } })}
+        style={{
+          width: '100%', height: '100%', background: 'transparent', border: 'none',
+          outline: 'none', resize: 'none', fontFamily: td.font || 'inherit',
+          fontSize: td.size ?? 27,
+          fontWeight: td.weight ?? 750,
+          fontStyle: td.italic ? 'italic' : 'normal',
+          letterSpacing: `${td.tracking ?? -0.6}px`,
+          lineHeight: td.leading ?? 1.18,
+          textAlign: align as any,
+          color: td.color || 'var(--text)',
+          cursor: selected ? 'text' : 'grab',
+          padding: 0,
+        }}
       />
       <div className="resize-handle" onPointerDown={(e) => onResizeStart(e, it)} />
     </div>

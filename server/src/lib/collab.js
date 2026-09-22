@@ -141,6 +141,11 @@ export function attachCollab(server) {
           ws.cursor = null;
           broadcast(boardId, { t: 'blur', sid: ws.sid }, ws);
           break;
+        // Live ink: strokes in progress, before they are committed as an item.
+        case 'ink':
+        case 'ink:end':
+          broadcast(boardId, { ...m, sid: ws.sid }, ws);
+          break;
         // Item mirroring: the sender has already persisted via REST.
         case 'item:add':
         case 'item:update':

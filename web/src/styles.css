@@ -917,3 +917,53 @@ kbd {
   color: #0aa87e; background: color-mix(in srgb, #0aa87e 14%, transparent);
   padding: 3px 7px; border-radius: 999px;
 }
+
+/* ==============================================================
+   EASIER SELECTION & DRAGGING
+   ============================================================== */
+
+/* Invisible padding around every item widens the grab area without
+   changing layout, so thin shapes and lines are easy to catch. */
+.board-item::before, .sticky::before {
+  content: ''; position: absolute; inset: -9px; z-index: -1;
+}
+/* Shapes are transparent SVG; give the whole box a grabbable surface
+   so you don't have to hit the 2px outline exactly. */
+.shape-item::before { inset: -10px; background: transparent; pointer-events: auto; }
+.shape-item svg { pointer-events: none; }
+.draw-item::before { inset: -10px; }
+
+/* Clear, consistent selection ring on every item type. */
+.board-item.selected, .sticky.selected {
+  outline: 2.5px solid var(--accent);
+  outline-offset: 3px;
+}
+.shape-item.selected, .draw-item.selected {
+  outline-offset: 1px;
+  border-radius: 10px;
+}
+/* Hover hint before you commit to a drag. */
+.board-item:not(.selected):hover, .sticky:not(.selected):hover {
+  outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent);
+  outline-offset: 3px;
+}
+
+/* Bigger, easier resize handle. */
+.resize-handle {
+  right: -8px; bottom: -8px; width: 20px; height: 20px;
+  opacity: 0;
+}
+.resize-handle::after {
+  content: ''; position: absolute; inset: -8px;   /* generous touch target */
+}
+.sticky:hover .resize-handle, .board-item:hover .resize-handle,
+.selected .resize-handle { opacity: 1; }
+@media (pointer: coarse) {
+  .resize-handle { width: 26px; height: 26px; right: -10px; bottom: -10px; opacity: .9; }
+}
+
+/* Text blocks: draggable until selected, then editable. */
+.text-item textarea { cursor: grab; }
+.text-item.selected textarea { cursor: text; }
+.text-item:not(.selected) textarea { user-select: none; pointer-events: none; }
+.text-bar { max-width: calc(100vw - 24px); overflow-x: auto; }

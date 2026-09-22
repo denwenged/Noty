@@ -23,8 +23,11 @@ in your notes, and proper multi-user accounts. Installs to your phone's home scr
   is pinned blind. The same dialog edits links on existing cards.
 - **Brand-coloured embeds** — links without a photo get a gradient built from the site's
   own `theme-color` (or a stable colour derived from the domain) instead of a grey box.
-- **Eraser tool** (`E`) — rub out ink by dragging over it; whole strokes are removed, and a
-  drawing that loses all its strokes deletes itself.
+- **Eraser tool** (`E`) — rubs out only the ink you touch. Dragging through the middle of a
+  line cuts a hole and leaves both ends; the drawing's frame reflows to hug what remains, and
+  a drawing erased completely removes itself.
+- **Customisable text** — size, bold, italic, alignment, display/body font and colour from a
+  formatting bar that appears whenever a text block is selected.
 - **Layer management** — bring to front / send to back / step up / step down from the
   selection bar, or `]` and `[` (add Shift to jump to the very front or back).
 - **Replace images** — swap the photo in an existing image frame without recreating it.
@@ -37,6 +40,8 @@ Invite other Noty users to a board and edit it together in real time:
 - Invited editors see the board in their own list, flagged as shared.
 - Everyone's cursor is shown live, colour-coded and labelled with their name.
 - Item creates, moves, edits and deletes replicate instantly to everyone viewing.
+- Freehand drawing streams **as you draw** — others watch the stroke appear, then it lands as
+  a real item when you finish.
 - Presence runs over a WebSocket at `/api/collab`; if it cannot connect the board degrades
   gracefully to normal single-user editing.
 
@@ -115,6 +120,19 @@ openssl rand -hex 32
 | `NOTY_PORT`  | `8080`            | Host port Noty is published on            |
 | `JWT_SECRET` | `please-change-me`| Signs login tokens — **change this**      |
 | `DATA_DIR`   | `/data`           | SQLite database + uploaded images         |
+
+### Demo data
+
+A fresh database starts empty; the first account you register becomes the admin. To load
+sample notes and boards instead:
+
+```bash
+cd server && node src/seed.js          # only runs if there are no users yet
+cd server && node src/seed.js --force  # wipe and recreate the demo content
+```
+
+That creates **demo / demo1234** with three notes and two boards (an infinite brainstorm with
+stickies, shapes, ink and a link card, plus a fixed-size 1920x1080 poster).
 
 ### Where the data lives
 
