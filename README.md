@@ -1,1 +1,280 @@
 # Noty
+
+A fast, self-hostable notes app with sticky-note **whiteboards**, images and links embedded right
+in your notes, and proper multi-user accounts. Installs to your phone's home screen like a native app.
+
+---
+
+### Desktop canvas, drawing & product links
+
+- **Mouse-pan anywhere** — drag empty canvas to pan, on infinite *and* fixed-size boards.
+- **Scroll to zoom** — the wheel zooms toward the cursor (0.1x–4x); `Shift`+wheel pans sideways.
+- **Drags release cleanly** — items follow the pointer only while the button is held.
+- **Freehand drawing** — press `D` or the pencil, sketch with 7 colours and 4 nib sizes, then
+  `Check` to commit the sketch as a single movable, resizable board item.
+- **Shapes** — rectangle, ellipse, triangle, diamond, star, arrow and line, tinted with the
+  sticky palette and resizable to any proportion.
+- **Link cards resize dynamically** — the layout reflows as you drag the handle: compact pill
+  when small, side-by-side thumbnail when wide, full banner plus description when tall.
+- **Product links** — paste an Amazon/eBay/shop URL and Noty pulls the product image, price,
+  original price and a `-30%` discount tag straight onto the card. Retailers that block
+  scraping still get a sensible card: the name is recovered from the URL slug.
+- **In-app link dialog** — the preview renders the exact card before you add it, so nothing
+  is pinned blind. The same dialog edits links on existing cards.
+- **Brand-coloured embeds** — links without a photo get a gradient built from the site's
+  own `theme-color` (or a stable colour derived from the domain) instead of a grey box.
+- **Eraser tool** (`E`) — rubs out only the ink you touch. Dragging through the middle of a
+  line cuts a hole and leaves both ends; the drawing's frame reflows to hug what remains, and
+  a drawing erased completely removes itself.
+- **Customisable text** — size, bold, italic, alignment, display/body font and colour from a
+  formatting bar that appears whenever a text block is selected.
+- **Layer management** — bring to front / send to back / step up / step down from the
+  selection bar, or `]` and `[` (add Shift to jump to the very front or back).
+- **Replace images** — swap the photo in an existing image frame without recreating it.
+
+### Collections
+
+Group related notes and share the whole group with other people:
+
+- Create a collection, then add any of your notes to it (a note can live in several).
+- Invite by username as an **editor** (can add, remove and edit the notes inside) or a
+  **viewer** (read-only). Only the owner can invite, remove people or delete the collection.
+- Shared notes appear in the members' own note list, so they can edit them in place.
+- Removing a note from a collection, or deleting the collection entirely, **never deletes the
+  notes** — it only breaks the grouping and revokes access.
+- Reach them from the sidebar, the `Sets` tab on phones, `G` then `C`, or the command palette.
+
+### Live collaboration
+
+Invite other Noty users to a board and edit it together in real time:
+
+- Owners invite by username from the **Collaborators** button in the board header.
+- Invited editors see the board in their own list, flagged as shared.
+- Everyone's cursor is shown live, colour-coded and labelled with their name.
+- Item creates, moves, edits and deletes replicate instantly to everyone viewing.
+- Freehand drawing streams **as you draw** — others watch the stroke appear, then it lands as
+  a real item when you finish.
+- Presence runs over a WebSocket at `/api/collab`; if it cannot connect the board degrades
+  gracefully to normal single-user editing.
+
+## Features
+
+**Notes — the home for text, images and links**
+- Rich note cards with 8 paper-tint palettes, pin / archive / trash flow, tags and tag filtering
+- Autosaving editor (debounced) — nothing is ever lost
+- **Images live inside notes**: click, drag-drop or paste straight from the clipboard
+- **Links live inside notes too**: paste a URL and Noty unfurls its title, description and favicon into a tidy pill
+- Full-text search across note text, tags and embedded links
+
+**Whiteboard mode**
+- **Two canvas modes**: *infinite* (pan and zoom forever) or *fixed* — an exact pixel page such as 1920×1080, with presets for FHD, HD, QHD, square, story and A4, plus any custom size up to 10000px
+- On a fixed canvas the page is drawn as a real bordered sheet and items are clamped inside its bounds
+- Pannable / zoomable (mouse wheel, ctrl+wheel to zoom, two-finger pinch on touch)
+- Five item types: **sticky notes**, **URL cards**, **images**, **checklists** and **text labels**
+- Every position, size, colour and rotation is saved to the server — it remembers exactly how you left it
+- Four canvas backgrounds (dots, grid, lines, plain), duplicate/delete, fit-to-screen
+- Double-click empty canvas to drop a sticky note
+
+**URLs, everywhere you need them**
+- Attach links to any **note** — shown as favicon pills you can click straight through
+- Pin links as visual cards on a **whiteboard**, using the page's OG preview image as the thumbnail
+- The server unfurls each URL to grab its real title, description and icon
+- Paste a URL into the command palette to file it into a new note in one step
+- No separate bookmarks screen: links belong to the note or board they relate to
+
+**Sharing**
+- Generate a public read-only short link (`/s/aB3xY7q2`) for any note or board
+- Revocable at any time; shared boards render fully, no account needed to view
+
+**Users & admin**
+- Open self-signup, **which an admin can switch off at any time** (existing users unaffected)
+- First account to register automatically becomes the administrator
+- Admin panel: create users, grant/revoke admin, disable accounts, delete users, rename the instance
+- Every user's notes, boards, images and links are fully isolated from each other
+
+**Design & platform**
+- Warm-paper light theme (default) and a deep-ink dark theme, 6 accent colours, drifting colour-blob backdrop, Bricolage Grotesque display type
+- Command palette (`⌘K` / `Ctrl+K`) with fuzzy search and quick actions
+- Keyboard shortcuts: `N` new note, `G`+`N/B/P` navigation, `F` fit board, `Del` remove item
+- Installable PWA — works on **iOS "Add to Home Screen"** and **Android install**, with app shortcuts, offline shell caching and safe-area insets for notched phones
+- Fully responsive: sidebar becomes a drawer, modals become true bottom sheets on mobile
+
+**Feels alive on phones**
+- **Bottom tab bar** for one-thumb navigation (Notes / Boards / Search / More), with a springy active indicator
+- **Swipe note cards**: right to pin, left to archive — with a live action label, colour wash and a haptic tick the moment you cross the threshold. Axis-locked, so it never fights vertical scrolling
+- **Drag-to-dismiss sheets**: pull down on any dialog; it rubber-bands, tracks velocity and flicks away
+- **Pull to refresh** on the notes list, with a rotating indicator
+- **Double-tap the canvas** to drop a sticky note; notes lift and scale when picked up and settle with a spring on release
+- **Haptic feedback** throughout (Android Vibration API), toggleable in Settings — iOS ignores it, so every cue is visual too
+- Staggered card entrances, shimmering skeleton loaders, animated counters, floating empty-state art and a gently pulsing compose button
+- Everything honours `prefers-reduced-motion`
+- One-click JSON export of all your data
+
+---
+
+## Quick start with Docker
+
+```bash
+cp .env.example .env          # then edit JWT_SECRET
+docker compose up -d --build
+```
+
+Open <http://localhost:8080> — **the first account you register becomes the admin.**
+
+Generate a real secret before exposing it anywhere:
+
+```bash
+openssl rand -hex 32
+```
+
+| Variable     | Default           | Purpose                                   |
+| ------------ | ----------------- | ----------------------------------------- |
+| `NOTY_PORT`  | `8080`            | Host port Noty is published on            |
+| `JWT_SECRET` | `please-change-me`| Signs login tokens — **change this**      |
+| `DATA_DIR`   | `/data`           | SQLite database + uploaded images         |
+
+### Demo data
+
+A fresh database starts empty; the first account you register becomes the admin. To load
+sample notes and boards instead:
+
+```bash
+cd server && node src/seed.js          # only runs if there are no users yet
+cd server && node src/seed.js --force  # wipe and recreate the demo content
+```
+
+That creates **demo / demo1234** with three notes and two boards (an infinite brainstorm with
+stickies, shapes, ink and a link card, plus a fixed-size 1920x1080 poster).
+
+### Where the data lives
+
+Noty writes **everything** under `DATA_DIR` (default `/data` inside the container):
+
+```
+/data
+├── noty.db          # SQLite: users, notes, boards, board items, shares, settings
+├── noty.db-wal      # write-ahead log (WAL mode) — part of the database, don't delete
+├── noty.db-shm      # shared-memory index — same
+└── uploads/         # uploaded images
+```
+
+The default Compose file maps that to the **named volume** `noty-data`, which survives
+`docker compose down`, `restart`, `up --build` and image rebuilds.
+
+Confirm what the running container is actually using:
+
+```bash
+curl -s localhost:8080/api/health     # -> {"ok":true,"dataDir":"/data","dbPath":"/data/noty.db"}
+docker compose logs noty | grep noty  # -> [noty] database = /data/noty.db (existing — data preserved)
+```
+
+On every boot Noty logs whether it opened an **existing** database or created a **new** one.
+If it says `NEW` on a restart, the data is not persisting — see below.
+
+#### If your data resets every restart
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `docker compose down -v` was used | `-v` deletes named volumes — that is its job | Use `docker compose down` |
+| `/data` on the host is empty and data resets | You bind-mounted a host dir that doesn't match the app's `DATA_DIR`, or you're looking at the host `/data` while the app writes to the *named volume* | Check `/api/health`; the default setup stores data in the volume, **not** in a host `/data` |
+| Log says `FATAL: DATA_DIR is not writable (EACCES)` | Bind-mounted host dir is root-owned; the container runs as uid `1000` | `sudo chown -R 1000:1000 /your/host/dir` |
+| Container recreated with a different project name | Compose namespaces volumes per project dir | Run `docker compose` from the same directory, or set `name:` in the compose file |
+
+To use a **host directory** instead of the named volume, replace the volume line in
+`docker-compose.yml` and fix ownership — this is the usual reason a mounted `/data` looks empty:
+
+```yaml
+    volumes:
+      - /srv/noty-data:/data      # host path : container path
+```
+
+```bash
+sudo mkdir -p /srv/noty-data && sudo chown -R 1000:1000 /srv/noty-data
+docker compose up -d --force-recreate
+```
+
+Inspect or back up the named volume directly:
+
+```bash
+docker volume inspect noty_noty-data                 # real path on disk
+docker run --rm -v noty_noty-data:/d alpine ls -la /d
+docker run --rm -v noty_noty-data:/d -v "$PWD":/b alpine tar czf /b/noty-backup.tgz -C /d .
+```
+
+
+```bash
+docker compose down          # stop, keep data
+docker compose down -v       # stop and wipe data
+docker compose logs -f       # follow logs
+```
+
+The image is a 3-stage build: the web client is compiled with Vite, the server installs
+production-only deps, and the runtime stage serves the API **and** the built SPA from a single
+Node process on port 4000 as a non-root user, with a healthcheck on `/api/health`.
+
+### Running behind a reverse proxy
+
+Noty serves plain HTTP; terminate TLS at your proxy (Caddy, nginx, Traefik). Example Caddyfile:
+
+```
+notes.example.com {
+    reverse_proxy localhost:8080
+}
+```
+
+HTTPS is recommended — iOS only offers "Add to Home Screen" as a true standalone app over a secure origin.
+
+---
+
+## Local development
+
+```bash
+npm run install:all   # install server + web dependencies
+npm run dev           # API on :4000, Vite dev server on :5173
+```
+
+Open <http://localhost:5173>; Vite proxies `/api` to the backend automatically.
+
+---
+
+## Installing on your phone
+
+- **iOS (Safari):** Share → *Add to Home Screen*. Launches fullscreen with no browser chrome.
+- **Android (Chrome):** menu → *Install app* / the install prompt.
+
+Long-pressing the installed icon exposes shortcuts to **New note** and **Whiteboards**.
+
+---
+
+## Tech
+
+| Layer    | Choice                                                    |
+| -------- | --------------------------------------------------------- |
+| Frontend | React 19, TypeScript, Vite, React Router, lucide-react     |
+| Backend  | Node 22, Express 5, better-sqlite3 (WAL)                   |
+| Auth     | JWT in an httpOnly cookie, bcrypt password hashing         |
+| Images   | multer + sharp — re-encoded to WebP with generated thumbnails |
+| Deploy   | Multi-stage Docker image + Compose, named volume for data  |
+
+### Project layout
+
+```
+server/src/
+  index.js          Express app, static SPA hosting
+  db.js             SQLite schema + settings helpers
+  auth.js           JWT issue/verify, auth & admin guards
+  routes/           auth, notes, boards, files, misc (shares, unfurl, admin, search)
+web/src/
+  Shell.tsx         App frame, sidebar, global hotkeys
+  CommandPalette.tsx
+  pages/            Notes, Boards, Board (canvas), Settings, Admin, Shared, Auth
+  store.tsx         Auth/session/theme context + toasts
+```
+
+## Security notes
+
+- Passwords are bcrypt-hashed; tokens are httpOnly cookies (90-day expiry)
+- Every note, board, image and shortcut query is scoped by `user_id` — cross-user access returns 404
+- Admin routes are guarded server-side, not just hidden in the UI
+- Uploads are restricted to images, capped at 12 MB, and re-encoded through sharp (strips EXIF and any embedded payloads)
+- An admin cannot disable, demote or delete their own account by accident

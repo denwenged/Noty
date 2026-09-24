@@ -1,0 +1,499 @@
+/**
+ * Link unfurling with product awareness.
+ *
+ * Pulls standard OpenGraph metadata, and — when the page looks like a product
+ * listing (Amazon, eBay, most Shopify/WooCommerce shops) — also extracts the
+ * product image, current price, list price and discount.
+ *
+ * Sources tried, in order of reliability:
+ *   1. JSON-LD  (schema.org Product / Offer)  — most accurate
+ *   2. Microdata / RDFa itemprop attributes
+ *   3. OpenGraph product:* + twitter:data meta tags
+ *   4. Site-specific DOM fallbacks (Amazon, eBay)
+ */
+
+const decodeEntities = (s = '') =>
+  s
+    .replace(/&(?:amp|#38);/g, '&')
+    .replace(/&(?:lt|#60);/g, '<')
+    .replace(/&(?:gt|#62);/g, '>')
+    .replace(/&(?:quot|#34);/g, '"')
+    .replace(/&(?:apos|#39|#x27);/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(+d))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCharCode(parseInt(h, 16)))
+    .trim();
+
+const CURRENCY_SYMBOL = {
+  USD: '$', EUR: '€', GBP: '£', JPY: '¥', CNY: '¥', INR: '₹', KRW: '₩',
+  AUD: 'A$', CAD: 'C$', CHF: 'CHF', SEK: 'kr', NOK: 'kr', DKK: 'kr',
+  PLN: 'zł', BRL: 'R$', MXN: 'MX$', RUB: '₽', TRY: '₺', ZAR: 'R',
+};
+
+export function formatPrice(amount, currency) {
+  if (amount == null || Number.isNaN(amount)) return null;
+  const cur = (currency || '').toUpperCase();
+  if (cur) {
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: cur,
+        maximumFractionDigits: amount % 1 === 0 ? 0 : 2,
+      }).format(amount);
+    } catch {
+      /* unknown currency code — fall through */
+    }
+  }
+  const sym = CURRENCY_SYMBOL[cur] || '';
+  const n = amount % 1 === 0 ? String(amount) : amount.toFixed(2);
+  return sym ? `${sym}${n}` : n;
+}
+
+/** Turn "1.299,00", "$1,299.00", "1 299.00 USD" into 1299.00 */
+export function parsePrice(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+  let s = String(raw).trim();
+  if (!s) return null;
+  // keep digits and separators only
+  s = s.replace(/[^\d.,]/g, '');
+  if (!s) return null;
+  const lastDot = s.lastIndexOf('.');
+  const lastComma = s.lastIndexOf(',');
+  if (lastDot !== -1 && lastComma !== -1) {
+    // whichever comes last is the decimal separator
+    if (lastComma > lastDot) s = s.replace(/\./g, '').replace(',', '.');
+    else s = s.replace(/,/g, '');
+  } else if (lastComma !== -1) {
+    const decimals = s.length - lastComma - 1;
+    // "1,299" = thousands; "12,99" = decimal
+    s = decimals === 3 ? s.replace(/,/g, '') : s.replace(',', '.');
+  } else {
+    const decimals = lastDot === -1 ? 0 : s.length - lastDot - 1;
+    if (decimals === 3 && s.replace(/\./g, '').length > 3) s = s.replace(/\./g, '');
+  }
+  const n = parseFloat(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Walk a JSON-LD blob (which may be an array or use @graph) for a Product. */
+function findProduct(node, depth = 0) {
+  if (!node || depth > 6) return null;
+  if (Array.isArray(node)) {
+    for (const n of node) {
+      const hit = findProduct(n, depth + 1);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (typeof node !== 'object') return null;
+
+  const type = node['@type'];
+  const types = Array.isArray(type) ? type : [type];
+  if (types.some((t) => typeof t === 'string' && /product|book|vehicle|offer/i.test(t))) {
+    if (types.some((t) => /product|book|vehicle/i.test(String(t)))) return node;
+  }
+  for (const key of ['@graph', 'mainEntity', 'itemListElement', 'hasVariant']) {
+    if (node[key]) {
+      const hit = findProduct(node[key], depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function offersOf(product) {
+  let o = product?.offers;
+  if (!o) return null;
+  if (Array.isArray(o)) o = o[0];
+  if (o && o['@type'] === 'AggregateOffer') {
+    return {
+      price: o.lowPrice ?? o.price,
+      priceCurrency: o.priceCurrency,
+      availability: o.availability,
+    };
+  }
+  return o;
+}
+
+export function extractProduct(html, host) {
+  const out = {
+    price: null,
+    priceFormatted: null,
+    currency: null,
+    listPrice: null,
+    listPriceFormatted: null,
+    discountPercent: null,
+    availability: null,
+    image: null,
+    title: null,
+    isProduct: false,
+  };
+
+  // ---------- 1. JSON-LD ----------
+  const ldBlocks = [...html.matchAll(/<script[^>]+application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const m of ldBlocks) {
+    let data;
+    try {
+      data = JSON.parse(m[1].trim().replace(/^\uFEFF/, ''));
+    } catch {
+      continue;
+    }
+    const product = findProduct(data);
+    if (!product) continue;
+    const offer = offersOf(product);
+    const price = parsePrice(offer?.price ?? offer?.lowPrice);
+    if (price != null) {
+      out.price = price;
+      out.currency = offer?.priceCurrency || out.currency;
+      out.isProduct = true;
+    }
+    const img = product.image;
+    const imgUrl = Array.isArray(img) ? img[0] : typeof img === 'object' ? img?.url : img;
+    if (imgUrl) out.image = String(imgUrl);
+    if (product.name) out.title = decodeEntities(String(product.name));
+    if (offer?.availability) out.availability = String(offer.availability).split('/').pop();
+    // schema sometimes carries the strikethrough price
+    const list =
+      parsePrice(product.listPrice) ??
+      parsePrice(offer?.highPrice) ??
+      parsePrice(offer?.priceSpecification?.price);
+    if (list && out.price && list > out.price) out.listPrice = list;
+    if (out.price != null) break;
+  }
+
+  const pick = (re) => {
+    const m = html.match(re);
+    return m ? decodeEntities(m[1]) : null;
+  };
+
+  // ---------- 2. microdata / RDFa ----------
+  if (out.price == null) {
+    const micro =
+      pick(/itemprop=["']price["'][^>]*content=["']([^"']+)/i) ||
+      pick(/content=["']([^"']+)["'][^>]*itemprop=["']price["']/i) ||
+      // some shops put the price in the element's text instead of an attribute
+      pick(/itemprop=["']price["'][^>]*>\s*([^<]{1,40})</i);
+    const p = parsePrice(micro);
+    if (p != null) {
+      out.price = p;
+      out.isProduct = true;
+      out.currency =
+        out.currency ||
+        pick(/itemprop=["']priceCurrency["'][^>]*content=["']([^"']+)/i) ||
+        pick(/content=["']([^"']+)["'][^>]*itemprop=["']priceCurrency["']/i);
+    }
+  }
+
+  // ---------- 3. OpenGraph product tags ----------
+  if (out.price == null) {
+    const og =
+      pick(/<meta[^>]+property=["'](?:og:price:amount|product:price:amount)["'][^>]+content=["']([^"']+)/i) ||
+      pick(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["'](?:og:price:amount|product:price:amount)["']/i) ||
+      pick(/<meta[^>]+(?:name|property)=["']twitter:data1["'][^>]+content=["']([^"']+)/i);
+    const p = parsePrice(og);
+    if (p != null) {
+      out.price = p;
+      out.isProduct = true;
+    }
+  }
+  out.currency =
+    out.currency ||
+    pick(/<meta[^>]+property=["'](?:og:price:currency|product:price:currency)["'][^>]+content=["']([^"']+)/i) ||
+    pick(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["'](?:og:price:currency|product:price:currency)["']/i);
+
+  // ---------- 4. site-specific fallbacks ----------
+  if (out.price == null && /amazon\./i.test(host)) {
+    const amazon =
+      pick(/class=["'][^"']*a-price-whole[^"']*["'][^>]*>([\d.,]+)/i) ||
+      pick(/id=["'](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["'][^>]*>\s*([^<]+)/i) ||
+      pick(/"displayPrice"\s*:\s*"([^"]+)"/i) ||
+      pick(/class=["'][^"']*a-offscreen[^"']*["'][^>]*>\s*([^<]+)/i);
+    const p = parsePrice(amazon);
+    if (p != null) {
+      out.price = p;
+      out.isProduct = true;
+      out.currency = out.currency || (/[£]/.test(amazon || '') ? 'GBP' : /€/.test(amazon || '') ? 'EUR' : 'USD');
+    }
+  }
+  if (out.price == null && /ebay\./i.test(host)) {
+    const ebay =
+      pick(/itemprop=["']price["'][^>]*>\s*([^<]+)/i) ||
+      pick(/id=["'](?:prcIsum|mm-saleDscPrc)["'][^>]*>\s*([^<]+)/i) ||
+      pick(/"price"\s*:\s*\{\s*"value"\s*:\s*"?([\d.,]+)/i) ||
+      pick(/class=["'][^"']*x-price-primary[^"']*["'][^>]*>[\s\S]{0,120}?([$€£]\s?[\d.,]+)/i);
+    const p = parsePrice(ebay);
+    if (p != null) {
+      out.price = p;
+      out.isProduct = true;
+    }
+  }
+
+  // amazon main image fallback
+  if (!out.image && /amazon\./i.test(host)) {
+    const hiRes =
+      pick(/"hiRes"\s*:\s*"([^"]+)"/i) ||
+      pick(/"large"\s*:\s*"([^"]+)"/i) ||
+      pick(/id=["']landingImage["'][^>]+data-old-hires=["']([^"']+)/i) ||
+      pick(/id=["']landingImage["'][^>]+src=["']([^"']+)/i);
+    if (hiRes) out.image = hiRes;
+  }
+  if (!out.image && /ebay\./i.test(host)) {
+    const eImg =
+      pick(/id=["'](?:icImg|mainImgHldr)["'][^>]+src=["']([^"']+)/i) ||
+      pick(/"image"\s*:\s*"(https:\/\/i\.ebayimg[^"]+)"/i);
+    if (eImg) out.image = eImg;
+  }
+
+  // list / "was" price
+  if (out.listPrice == null) {
+    const was =
+      pick(/<meta[^>]+property=["']product:original_price:amount["'][^>]+content=["']([^"']+)/i) ||
+      pick(/class=["'][^"']*(?:a-text-price|basisPrice|was-price|list-price|compare-at|strikethrough|price--original)[^"']*["'][^>]*>[\s\S]{0,160}?([$€£¥]\s?[\d.,]+|[\d.,]+\s*(?:USD|EUR|GBP))/i) ||
+      pick(/<(?:del|s)\b[^>]*>[\s\S]{0,80}?([$€£¥]\s?[\d.,]+)/i);
+    const p = parsePrice(was);
+    if (p != null && out.price != null && p > out.price) out.listPrice = p;
+  }
+
+  if (!out.availability) {
+    const av = pick(/itemprop=["']availability["'][^>]*(?:content|href)=["']([^"']+)/i);
+    if (av) out.availability = av.split('/').pop();
+  }
+
+  // ---------- derive formatted values + discount ----------
+  if (out.price != null && !out.currency) {
+    const symbolSource = html.match(/itemprop=["']price["'][^>]*>\s*([^<]{1,40})</i)?.[1] || '';
+    if (/£/.test(symbolSource)) out.currency = 'GBP';
+    else if (/€/.test(symbolSource)) out.currency = 'EUR';
+    else if (/\$/.test(symbolSource)) out.currency = 'USD';
+  }
+  if (out.price != null) {
+    out.priceFormatted = formatPrice(out.price, out.currency);
+    if (out.listPrice && out.listPrice > out.price) {
+      out.listPriceFormatted = formatPrice(out.listPrice, out.currency);
+      out.discountPercent = Math.round(((out.listPrice - out.price) / out.listPrice) * 100);
+      if (out.discountPercent < 1 || out.discountPercent > 99) {
+        out.discountPercent = null;
+        out.listPrice = null;
+        out.listPriceFormatted = null;
+      }
+    }
+  }
+  return out;
+}
+
+/** Fetch a URL and build a rich preview object. */
+export async function unfurl(url) {
+  const host = new URL(url).hostname;
+  const base = {
+    url,
+    title: host.replace(/^www\./, ''),
+    description: '',
+    favicon: `https://icons.duckduckgo.com/ip3/${host}.ico`,
+    image: null,
+    isProduct: false,
+    price: null,
+    priceFormatted: null,
+    listPriceFormatted: null,
+    discountPercent: null,
+    currency: null,
+    availability: null,
+    siteName: null,
+    brandColor: null,
+    blocked: false,
+  };
+  base.brandColor = hostColor(host);
+  // Even if the fetch fails we can still name the card from its URL.
+  const urlTitle = titleFromUrl(url);
+  if (urlTitle) base.title = urlTitle;
+  if (looksLikeProductUrl(url)) base.isProduct = true;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 9000);
+  let html = '';
+  try {
+    const resp = await fetch(url, {
+      signal: ctrl.signal,
+      redirect: 'follow',
+      headers: {
+        // Retailers serve stripped pages to obvious bots.
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+    html = (await resp.text()).slice(0, 700000);
+  } catch {
+    return { ...base, blocked: true };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const pick = (re) => {
+    const m = html.match(re);
+    return m ? decodeEntities(m[1]) : null;
+  };
+
+  const ogTitle =
+    pick(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']*)/i) ||
+    pick(/<meta[^>]+content=["']([^"']*)["'][^>]+property=["']og:title["']/i) ||
+    pick(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  const description =
+    pick(/<meta[^>]+property=["']og:description["'][^>]+content=["']([^"']*)/i) ||
+    pick(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']*)/i) ||
+    '';
+  let image =
+    pick(/<meta[^>]+property=["']og:image:secure_url["'][^>]+content=["']([^"']+)/i) ||
+    pick(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)/i) ||
+    pick(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
+    pick(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)/i);
+  const siteName = pick(/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)/i);
+
+  const blocked = isBlockedPage(html, ogTitle);
+  const product = extractProduct(html, host);
+  if (product.image) image = product.image;
+
+  // resolve protocol-relative / relative image URLs
+  if (image) {
+    try {
+      image = new URL(image, url).href;
+    } catch {
+      image = null;
+    }
+  }
+
+  // Prefer a real product name; fall back to the URL slug when the retailer
+  // served a bot wall or a title that is just the shop's name.
+  const cleaned = cleanTitle(product.title || ogTitle, host);
+  const title = (blocked ? urlTitle || cleaned : cleaned || urlTitle) || base.title;
+
+  return {
+    ...base,
+    title,
+    description: blocked ? '' : description,
+    image,
+    siteName,
+    blocked,
+    brandColor: brandColor(html, host),
+    isProduct: product.isProduct || (looksLikeProductUrl(url) && (product.price != null || blocked || isShopHost(host))),
+    price: product.price,
+    currency: product.currency,
+    priceFormatted: product.priceFormatted,
+    listPriceFormatted: product.listPriceFormatted,
+    discountPercent: product.discountPercent,
+    availability: product.availability,
+  };
+}
+
+/* ============================================================
+   Retailer awareness, bot-block detection and brand colours
+   ============================================================ */
+
+/** Hostnames that are product pages even when the HTML is a bot wall. */
+const SHOPS = [
+  'amazon.', 'ebay.', 'etsy.', 'aliexpress.', 'walmart.', 'target.', 'bestbuy.',
+  'newegg.', 'wayfair.', 'ikea.', 'argos.', 'zalando.', 'asos.', 'shein.',
+  'temu.', 'mediamarkt.', 'fnac.', 'elcorteingles.', 'pccomponentes.',
+  'bol.com', 'otto.de', 'cdiscount.', 'allegro.', 'flipkart.', 'rakuten.',
+  'shopify.', 'backmarket.', 'decathlon.', 'leroymerlin.',
+];
+
+export const isShopHost = (host) => SHOPS.some((s) => host.includes(s));
+
+/** Product-page URL patterns (Amazon /dp/, eBay /itm/, Shopify /products/…). */
+const PRODUCT_PATH = /\/(?:dp|gp\/product|itm|product|products|listing|p|pd|ip)\/|[?&](?:sku|productId|item)=/i;
+
+export const looksLikeProductUrl = (url) => {
+  try {
+    const u = new URL(url);
+    return PRODUCT_PATH.test(u.pathname + u.search) || isShopHost(u.hostname);
+  } catch { return false; }
+};
+
+/**
+ * Retailers frequently answer datacentre IPs with a captcha / "Robot Check" /
+ * "Access Denied" page. Detect that so we can fall back to the URL instead of
+ * saving a card that just says "Amazon".
+ */
+export function isBlockedPage(html, title) {
+  const t = (title || '').toLowerCase();
+  if (/robot check|are you a human|access denied|captcha|bot detection|verify you are|enable javascript|page not found|just a moment/i.test(t))
+    return true;
+  if (html.length < 2500 && /captcha|automated access|unusual traffic/i.test(html)) return true;
+  return /id=["']captchacharacters|amazon\.com\/errors\/validatecaptcha|cf-browser-verification/i.test(html);
+}
+
+/**
+ * Derive a readable product name from the URL when the page gives us nothing.
+ * "…/Sony-WH-1000XM5-Cancelling-Headphones/dp/B09XS7JWHH" -> "Sony WH-1000XM5 Cancelling Headphones"
+ */
+export function titleFromUrl(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const segs = u.pathname.split('/').filter(Boolean);
+  const junk = /^(dp|gp|product|products|itm|listing|p|pd|ip|ref|category|c|b|s|shop|store|item|en|us|uk|es|de|fr)$/i;
+  // Longest hyphenated, non-ID segment is almost always the slug.
+  const cand = segs
+    .filter((s) => !junk.test(s) && !/^[A-Z0-9]{8,14}$/.test(s) && !/^\d+$/.test(s))
+    .sort((a, b) => b.length - a.length)[0];
+  if (!cand) return null;
+  const words = decodeURIComponent(cand)
+    .replace(/\.(html?|php|aspx?)$/i, '')
+    .replace(/[-_+]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (words.length < 3 || words.length > 120) return null;
+  // Title-case only all-lowercase slugs; keep existing capitals (model numbers).
+  const t = words === words.toLowerCase()
+    ? words.replace(/\b[a-z]/g, (c) => c.toUpperCase())
+    : words;
+  return t;
+}
+
+/** Strip retailer boilerplate: "Amazon.com: Real Name : Electronics" -> "Real Name" */
+export function cleanTitle(title, host) {
+  if (!title) return null;
+  let t = decodeEntities(title).replace(/\s+/g, ' ').trim();
+  t = t.replace(/^(amazon(\.[a-z.]+)?|ebay|etsy|walmart|target|best ?buy|aliexpress)\s*[:|–-]\s*/i, '');
+  t = t.replace(/\s*[:|–-]\s*(amazon(\.[a-z.]+)?|ebay|etsy|walmart|target|best ?buy)(\.[a-z]+)?\s*$/i, '');
+  // Amazon appends " : Category : Subcategory"
+  const parts = t.split(/\s+:\s+/);
+  if (parts.length > 1 && parts[0].length > 12) t = parts[0];
+  t = t.replace(/\s*\|\s*[^|]{0,40}$/, (m) => (t.length - m.length > 20 ? '' : m));
+  t = t.trim();
+  const bare = host.replace(/^www\./, '');
+  if (!t || t.toLowerCase() === bare) return null;
+  return t.slice(0, 200);
+}
+
+/** Brand colour for gradient fallbacks: theme-color, msapplication tile, or a hashed hue. */
+export function brandColor(html, host) {
+  const m =
+    html.match(/<meta[^>]+name=["']theme-color["'][^>]+content=["']([^"']+)/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']theme-color["']/i) ||
+    html.match(/<meta[^>]+name=["']msapplication-TileColor["'][^>]+content=["']([^"']+)/i);
+  const raw = m?.[1]?.trim();
+  if (raw && /^#?[0-9a-f]{3,8}$/i.test(raw)) return raw.startsWith('#') ? raw : '#' + raw;
+  if (raw && /^rgb/i.test(raw)) {
+    const n = raw.match(/\d+/g);
+    if (n?.length >= 3) return '#' + n.slice(0, 3).map((v) => (+v).toString(16).padStart(2, '0')).join('');
+  }
+  return hostColor(host);
+}
+
+/** Deterministic, pleasant colour derived from the hostname. */
+export function hostColor(host) {
+  const known = {
+    'amazon': '#ff9900', 'ebay': '#e53238', 'etsy': '#f1641e', 'youtube': '#ff0000',
+    'github': '#24292f', 'twitter': '#1d9bf0', 'x.com': '#000000', 'reddit': '#ff4500',
+    'wikipedia': '#36c', 'figma': '#a259ff', 'notion': '#000000', 'spotify': '#1db954',
+    'linkedin': '#0a66c2', 'instagram': '#e1306c', 'stackoverflow': '#f48024',
+    'walmart': '#0071dc', 'target': '#cc0000', 'ikea': '#0058a3', 'aliexpress': '#ff4747',
+  };
+  const bare = host.replace(/^www\./, '');
+  for (const [k, v] of Object.entries(known)) if (bare.includes(k)) return v;
+  let h = 0;
+  for (let i = 0; i < bare.length; i++) h = (h * 31 + bare.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 68% 52%)`;
+}
